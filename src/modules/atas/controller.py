@@ -1,6 +1,7 @@
 from PyQt6.QtCore import *
 from modules.atas.widgets.worker_homologacao import Worker 
-from PyQt6.QtWidgets import QFileDialog
+from PyQt6.QtWidgets import QFileDialog, QMessageBox
+import pandas as pd
 
 class GerarAtasController(QObject): 
     def __init__(self, icons, view, model):
@@ -19,61 +20,96 @@ class GerarAtasController(QObject):
         self.view.sicafSignal.connect(self.sicaf_widget)
         self.view.atasSignal.connect(self.gerar_atas)
 
-        # Configura os botões usando GerarAtasModel
-        self.view.tr_widget.abrirTabelaNova.connect(self.abrir_tabela_nova)
+        # --- NOVAS CONEXÕES DO TERMO DE REFERÊNCIA ---
         self.view.tr_widget.configurarSqlModelSignal.connect(self.configurar_sql_model)
-
-        # Conecta o sinal de carregar tabela ao método do modelo
-        self.view.tr_widget.carregarTabela.connect(self.caregar_tabela_com_dados)
+        
+        # Intercepta os SINAIS da View
+        self.view.tr_widget.dadosExtraidosSignal.connect(self.atualizar_banco_com_df)
+        self.view.tr_widget.limparTabelaSignal.connect(self.limpar_tabela) # <-- NOVA CONEXÃO AQUI
         
         # Conecta o sinal `tabelaCarregada` para configurar o modelo SQL após carregar a tabela
         self.model.tabelaCarregada.connect(self.configurar_sql_model)
 
         if hasattr(self.view.homolog_widget, 'gerarPlanilhaBaseClicked'):
              self.view.homolog_widget.gerarPlanilhaBaseClicked.connect(self.iniciar_geracao_planilha_base)
+
+    def limpar_tabela(self):
+        """
+        Função para esvaziar todos os registros do banco de dados atrelado à tabela atual.
+        """
+        resposta = QMessageBox.question(
+            self.view.tr_widget,
+            "Confirmar Limpeza",
+            "Tem certeza de que deseja apagar todos os itens da tabela atual?\nIsso não pode ser desfeito.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if resposta == QMessageBox.StandardButton.Yes:
+            # Remove as linhas de trás para frente para evitar perda de índice
+            num_rows = self.model.rowCount()
+            for i in range(num_rows - 1, -1, -1):
+                self.model.removeRow(i)
+            
+            # Submete a transação para o banco de dados
+            if self.model.submitAll():
+                self.model.select()  # Recarrega a view para refletir que a tabela está vazia
+            else:
+                QMessageBox.warning(
+                    self.view.tr_widget, 
+                    "Erro", 
+                    f"Erro ao limpar banco de dados: {self.model.lastError().text()}"
+                )
     
+    def atualizar_banco_com_df(self, df):
+        """
+        Recebe o DataFrame do PDF extraído e injeta no modelo SQL para exibição.
+        """
+        if df.empty:
+            return
+
+        # 1. CORREÇÃO: Limpa os registros antigos da mesma forma segura
+        num_rows = self.model.rowCount()
+        for i in range(num_rows - 1, -1, -1):
+            self.model.removeRow(i)
+        self.model.submitAll()
+
+        # 2. Itera sobre as linhas do Pandas e insere no modelo SQL da PyQt
+        for index, row in df.iterrows():
+            record = self.model.record()
+            record.setValue("item", str(row['item']))
+            record.setValue("catalogo", str(row['catalogo']))
+            record.setValue("descricao", str(row['descricao']))
+            record.setValue("descricao_detalhada", str(row['descricao_detalhada']))
+            
+            # Insere o registro na última linha
+            self.model.insertRecord(-1, record)
+        
+        # 3. Confirma a transação no banco e recarrega a visualização
+        if self.model.submitAll():
+            self.model.select() # Dá um "refresh" na View
+        else:
+            print(f"Erro ao salvar no banco: {self.model.lastError().text()}")
+
+
     def iniciar_geracao_planilha_base(self):
-        """
-        Esta função é chamada quando o usuário clica no botão "Gerar Planilha Base".
-        Ela configura e inicia o Worker no modo 'tabela_base'.
-        """
-        # Pega o diretório dos PDFs a partir do widget de homologação
         pdf_dir = self.view.homolog_widget.pdf_dir
         if not pdf_dir or not pdf_dir.exists():
-            # Você pode mostrar um pop-up de erro aqui
             print("Erro: O diretório de PDFs não foi selecionado.")
             return
 
-        # 1. Cria a instância do Worker no modo correto
         self.worker = Worker(pdf_dir=pdf_dir, modo='tabela_base')
-
-        # 2. Conecta os sinais do worker aos slots (funções) da sua interface
-        # Conecta o sinal de progresso à sua barra de progresso
         self.worker.progress_signal.connect(self.view.homolog_widget.update_progress)
-        # Conecta as mensagens de log à sua área de texto de contexto
         self.worker.update_context_signal.connect(self.view.homolog_widget.update_context)
-        # Conecta o sinal de conclusão da thread
         self.worker.finished.connect(self.finalizar_worker)
-        # ** A conexão mais importante: Quando a tabela estiver pronta, chama a função para salvar **
         self.worker.tabela_base_pronta.connect(self.salvar_planilha_base)
-
-        # 3. Inicia a thread
         self.worker.start()
-        # Opcional: Desabilitar o botão enquanto o worker estiver rodando
         self.view.homolog_widget.set_buttons_enabled(False)
     
     def salvar_planilha_base(self, df):
-        """
-        Este slot é ativado pelo sinal 'tabela_base_pronta' do worker.
-        Ele recebe o DataFrame e abre uma janela para salvar o arquivo.
-        """
         if df.empty:
-            # Você pode mostrar uma mensagem de aviso aqui
             print("AVISO: O DataFrame está vazio. Nenhum arquivo será salvo.")
             return
 
-        # Abre a caixa de diálogo "Salvar como..."
-        # O padrão é o nome do arquivo que sugerimos
         caminho_inicial = "planilha_base_licitacao.xlsx"
         caminho_arquivo, _ = QFileDialog.getSaveFileName(
             self.view,
@@ -82,59 +118,35 @@ class GerarAtasController(QObject):
             "Arquivos Excel (*.xlsx);;Todos os Arquivos (*)"
         )
 
-        # Se o usuário selecionou um caminho e clicou em "Salvar"
         if caminho_arquivo:
             try:
-                # Usa o pandas para salvar o DataFrame em um arquivo .xlsx
                 df.to_excel(caminho_arquivo, index=False)
                 self.view.homolog_widget.update_context(f"Sucesso! Planilha salva em: {caminho_arquivo}")
-                # Você pode adicionar um pop-up de sucesso aqui se desejar
             except Exception as e:
                 self.view.homolog_widget.update_context(f"ERRO ao salvar a planilha: {e}")
-                # Você pode adicionar um pop-up de erro aqui
 
     def finalizar_worker(self):
-        """
-        Chamado quando a thread do worker termina.
-        """
         self.view.homolog_widget.update_context("Processo finalizado.")
-        # Reabilita os botões na interface
         self.view.homolog_widget.set_buttons_enabled(True)
-        self.worker = None # Limpa a referência
-
+        self.worker = None 
 
     def configurar_sql_model(self):
-        # Aplica `self.model` ao `table_view` diretamente
         self.view.tr_widget.table_view.setModel(self.model)
         self.view.configurar_visualizacao_tabela_tr(self.view.tr_widget.table_view)
 
-    def abrir_tabela_nova(self):
-        # Lógica para abrir uma nova tabela
-        self.model.abrir_tabela_nova()
-
-    def caregar_tabela_com_dados(self):
-        # Lógica para abrir uma nova tabela
-        self.model.carregar_tabela()
-        
     def instrucoes(self):
-        # Atualiza para o widget de instruções
         self.view.content_area.setCurrentWidget(self.view.instrucoes_widget)
 
     def termo_referencia(self):
-        # Define o widget atual para Termo de Referência
         self.view.content_area.setCurrentWidget(self.view.tr_widget)
-        # Configura o QTableView com o modelo e ajusta a visualização
         self.view.tr_widget.table_view.setModel(self.model)
         self.view.configurar_visualizacao_tabela_tr(self.view.tr_widget.table_view)
 
     def termo_homologacao(self):
-        # Exibe o widget de Processamento para Termo de Homologação
         self.view.content_area.setCurrentWidget(self.view.homolog_widget)
 
     def sicaf_widget(self):
-        # Exibe o widget de Processamento para Termo de Homologação
         self.view.content_area.setCurrentWidget(self.view.sicaf_widget)
 
     def gerar_atas(self):
-        # Atualiza para o widget de geração de atas
         self.view.content_area.setCurrentWidget(self.view.atas_widget)
