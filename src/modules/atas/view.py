@@ -89,9 +89,9 @@ class GerarAtasView(QMainWindow):
         if table_view.model() is None:
             return 
 
-        # Índices exatos das colunas no banco de dados: 
-        # 1 (item), 2 (catalogo), 3 (descricao), 14 (descricao_detalhada)
-        visible_columns = [1, 2, 3, 14] 
+        # Índices corrigidos com base no SQLite (CREATE TABLE):
+        # 1 = item | 2 = catalogo | 3 = descricao | 4 = descricao_detalhada
+        visible_columns = [1, 2, 3, 4] 
         
         for col in range(table_view.model().columnCount()):
             if col not in visible_columns:
@@ -100,12 +100,12 @@ class GerarAtasView(QMainWindow):
                 header = table_view.model().headerData(col, Qt.Orientation.Horizontal)
                 table_view.model().setHeaderData(col, Qt.Orientation.Horizontal, header)
 
-        # Configuração de largura para melhorar a leitura
+        # Configuração de largura das colunas
         table_view.setColumnWidth(1, 50)   # item
         table_view.setColumnWidth(2, 100)  # catalogo
         table_view.setColumnWidth(3, 300)  # descricao
         
-        # Faz com que a descrição detalhada ocupe todo o restante do espaço livre da tela
+        # Faz com que a descrição detalhada (coluna 4) ocupe o restante do espaço
         table_view.horizontalHeader().setStretchLastSection(True)
 
     def on_pdf_dir_changed(self, new_pdf_dir):

@@ -72,15 +72,17 @@ class GerarAtasController(QObject):
             QMessageBox.warning(self.view, "Aviso", "Nenhum item válido retornado da Homologação.")
             return
 
-        # Limpeza para garantir cruzamento exato das chaves (número do item)
-        df_homolog['item'] = df_homolog['item'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-        self.df_tr_temp['item'] = self.df_tr_temp['item'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        # ALINHAMENTO DE CHAVES PARA EVITAR COLUNAS VAZIAS (converte "16.0" para "16")
+        df_homolog['item'] = pd.to_numeric(df_homolog['item'], errors='coerce').fillna(-1).astype(int).astype(str)
+        self.df_tr_temp['item'] = pd.to_numeric(self.df_tr_temp['item'], errors='coerce').fillna(-1).astype(int).astype(str)
 
-        # MESCLAGEM: O Homologação traz a DESCRIÇÃO e valores. O TR traz o CATÁLOGO e a ESPECIFICAÇÃO (Descrição Detalhada).
+        # CRUZAMENTO PERFEITO: 
+        # df_homolog traz -> 'item' e 'descricao'
+        # df_tr_temp traz -> 'item', 'catalogo' e 'descricao_detalhada'
         df_final = pd.merge(df_homolog, self.df_tr_temp, on='item', how='left')
 
         self.atualizar_banco_com_df(df_final)
-        QMessageBox.information(self.view, "Sucesso", "Dados cruzados com sucesso!")
+        QMessageBox.information(self.view, "Sucesso", "Dados do TR e Homologação cruzados com sucesso!")
 
     def atualizar_banco_com_df(self, df):
         if df.empty:
