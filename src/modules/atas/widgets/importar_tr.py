@@ -1,6 +1,7 @@
 import os
 import pandas as pd
-import pdfplumber
+import fitz
+import re
 from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
 from PyQt6.QtCore import *
@@ -49,9 +50,9 @@ class PreencherTabelaDialog(QDialog):
         botoes_layout = QHBoxLayout()
         self.btn_cancelar = QPushButton("Cancelar")
         self.btn_cancelar.clicked.connect(self.reject)
-        
+
         self.btn_preencher = QPushButton("Processar Documentos")
-        self.btn_preencher.setEnabled(False) 
+        self.btn_preencher.setEnabled(False)
         self.btn_preencher.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
         self.btn_preencher.clicked.connect(self.accept)
 
@@ -80,11 +81,11 @@ class PreencherTabelaDialog(QDialog):
             self.btn_preencher.setEnabled(True)
 
 
-class TermosWidget(QWidget): 
-    preencherTabelaSignal = pyqtSignal() 
+class TermosWidget(QWidget):
+    preencherTabelaSignal = pyqtSignal()
     iniciarExtracaoDuplaSignal = pyqtSignal(str, str)
-    limparTabelaSignal = pyqtSignal() 
-    configurarSqlModelSignal = pyqtSignal() 
+    limparTabelaSignal = pyqtSignal()
+    configurarSqlModelSignal = pyqtSignal()
 
     def __init__(self, parent, icons):
         super().__init__(parent)
@@ -92,26 +93,25 @@ class TermosWidget(QWidget):
         self.resize(800, 600)
         self.parent = parent
         self.icons = icons
-        
+
         self.layout = QVBoxLayout(self)
-        
+
         title_layout = QHBoxLayout()
         title_layout.addStretch()
-        
+
         title = QLabel("Extração e Cruzamento de Termos")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setFont(QFont('Arial', 16, QFont.Weight.Bold))
         title_layout.addWidget(title)
 
-        
         add_button("Preencher Tabela", "excel_down", self.preencherTabelaSignal, title_layout, self.icons, tooltip="Cruza dados do TR e Homologação", button_size=(200, 30))
         self.preencherTabelaSignal.connect(self.abrir_modal_preencher)
-        
+
         add_button("Limpar Tabela", "delete", self.limparTabelaSignal, title_layout, self.icons, tooltip="Limpa todos os dados da tabela", button_size=(200, 30))
 
         title_layout.addStretch()
         self.layout.addLayout(title_layout)
-        
+
         title1 = QLabel("Nesta aba o sistema cruza as especificações do Termo de Referência com os vencedores do Termo de Homologação.")
         title1.setAlignment(Qt.AlignmentFlag.AlignLeft)
         title1.setFont(QFont('Arial', 12))
@@ -119,7 +119,7 @@ class TermosWidget(QWidget):
 
         self.table_view = QTableView(self)
         self.table_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
-        self.table_view.verticalHeader().setVisible(False) 
+        self.table_view.verticalHeader().setVisible(False)
         self.layout.addWidget(self.table_view)
 
         self.table_view.setStyleSheet("""
@@ -139,123 +139,145 @@ class TermosWidget(QWidget):
                 self.iniciarExtracaoDuplaSignal.emit(dialog.caminho_tr, dialog.caminho_homolog)
 
     def extrair_dados_tr(self, pdf_path):
-        """Extrai do TR apenas o Item, Catálogo e Especificação (Descrição Detalhada)."""
+        import pdfplumber
+        import pandas as pd
+        import re
+
         try:
             linhas_brutas = []
-            config_tabela = {"vertical_strategy": "lines", "horizontal_strategy": "text", "intersection_y_tolerance": 15}
-
+            
             with pdfplumber.open(pdf_path) as pdf:
                 for page in pdf.pages:
-                    tables = page.extract_tables(table_settings=config_tabela)
-                    if not tables:
-                        tables = page.extract_tables()
+                    tables = page.extract_tables()
+                    if not tables: continue
                     for table in tables:
                         for row in table:
-                            if row: linhas_brutas.append(row)
+                            if not any(row): continue
+                            
+                            # DESDOBRADOR DE CÉLULAS (Mantido, pois resolve os itens fundidos perfeitamente)
+                            max_lines = 1
+                            for cell in row:
+                                if cell:
+                                    linhas_celula = str(cell).split('\n')
+                                    if len(linhas_celula) > max_lines:
+                                        max_lines = len(linhas_celula)
+                                        
+                            for i in range(max_lines):
+                                new_row = []
+                                for cell in row:
+                                    if not cell:
+                                        new_row.append("")
+                                    else:
+                                        linhas_celula = str(cell).split('\n')
+                                        if i < len(linhas_celula):
+                                            new_row.append(linhas_celula[i].strip())
+                                        else:
+                                            new_row.append("")
+                                if any(new_row):
+                                    linhas_brutas.append(new_row)
 
-            dados = []
-            current_item = ["", "", ""] # [0] item, [1] especificacao, [2] catalogo
-
-            def salvar_item_atual():
-                if current_item[0] or current_item[1]:
-                    dados.append({
-                        'item': current_item[0],
-                        'descricao_detalhada': current_item[1],
-                        'catalogo': current_item[2]
-                    })
+            dados = {}
+            current_item = None
+            orphan_cat = ""
+            orphan_spec = ""
 
             for row in linhas_brutas:
-                row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
-                while len(row) < 4: row.append("")
+                row_clean = [str(c).replace('\n', ' ').strip() for c in row]
+                texto_linha = " ".join(row_clean).lower()
                 
-                texto_linha = "".join(row).strip().lower()
-                termos_ignorar = ["manual de modelos", "modelos de licitações", "licitações e contratos", "consultoria-geral", "da união", "secretaria de gestão", "gestão e inovação", "e inovação", "atualização:", "maio/2023", "câmara nacional"]
-                
-                if any(termo in texto_linha for termo in termos_ignorar) or not texto_linha or 'ITEM' in row[0].upper() or 'DESCRIÇÃO' in row[1].upper():
+                # Ignora rodapés e cabeçalhos
+                termos_ignorar = ["manual de modelos", "consultoria-geral", "da união", "secretaria de gestão", "atualização:", "câmara nacional"]
+                if any(termo in texto_linha for termo in termos_ignorar):
+                    continue
+                if 'item' in str(row_clean[0]).lower() or ('descrição' in texto_linha and 'especificação' in texto_linha):
                     continue
 
-                # Pega as colunas do meio (1 e 2) e junta tudo como "Especificação"
-                r_item = row[0]
-                r_spec = (row[1] + " " + row[2]).strip()
-                r_cat = row[3] 
-                
-                is_new = False
-                if r_item.isdigit():
-                    if current_item[0] != "": is_new = True
-                else:
-                    if r_cat != "" and current_item[2] != "": is_new = True
+                r_item = ""
+                r_cat = ""
+                spec_parts = []
+
+                # 1. IDENTIFICA O ITEM (Sempre na primeira célula)
+                primeira_celula = re.sub(r'[^\d]', '', row_clean[0])
+                if primeira_celula and row_clean[0].strip() == primeira_celula:
+                    r_item = primeira_celula
+
+                # 2. O ARRASTÃO: Varre todas as células da linha (da esq. para a dir.)
+                for i, cell in enumerate(row_clean):
+                    if i == 0 and r_item: 
+                        continue # Pula a célula do Item para não a juntar ao texto
                         
-                if is_new:
-                    salvar_item_atual()
-                    current_item = ["", "", ""]
-                
-                if r_item.isdigit(): current_item[0] = r_item
-                
-                if r_item and not r_item.isdigit(): current_item[1] = (current_item[1] + " " + r_item).strip()
-                if r_spec: current_item[1] = (current_item[1] + " " + r_spec).strip()
-                if r_cat: current_item[2] = (current_item[2] + " " + r_cat).strip()
+                    if not cell: 
+                        continue
 
-            salvar_item_atual()
+                    # Identifica o Catmat (limpa aspas residuais)
+                    limpo_cat = re.sub(r'[^\d]', '', cell)
+                    if not r_cat and len(limpo_cat) >= 5 and len(limpo_cat) <= 7 and re.fullmatch(r'\d{5,7}', limpo_cat):
+                        if len(cell) <= 12: # Garante que é uma célula curta com o código
+                            r_cat = limpo_cat
+                            continue
+                    
+                    # Filtro anti-lixo numérico: Ignora Quantidades e Valores Financeiros (Ex: "566", "14,00", "7.924,00")
+                    if re.fullmatch(r'\d{1,4}', cell) or re.fullmatch(r'\d{1,3}(?:\.\d{3})*(?:,\d{2})', cell):
+                        continue
+                        
+                    # Se não é o Item, não é o Catmat, e não é um número solto... é a ESPECIFICAÇÃO!
+                    spec_parts.append(cell)
 
-            if dados:
-                df = pd.DataFrame(dados)
-                for col in ['descricao_detalhada', 'catalogo']:
-                    df[col] = df[col].apply(lambda x: " ".join(str(x).split()) if x else "")
+                r_spec = " ".join(spec_parts).strip()
+
+                # 3. LÓGICA DE ALOCAÇÃO (A mesma que salvou os Catmats!)
+                if r_item:
+                    current_item = str(int(r_item))
+                    if current_item not in dados:
+                        dados[current_item] = {"catalogo": "", "descricao_detalhada": ""}
+                    
+                    if orphan_cat:
+                        dados[current_item]["catalogo"] = orphan_cat
+                        orphan_cat = ""
+                    if orphan_spec:
+                        dados[current_item]["descricao_detalhada"] += (" " + orphan_spec)
+                        orphan_spec = ""
+                        
+                    if r_cat: dados[current_item]["catalogo"] = r_cat
+                    if r_spec: dados[current_item]["descricao_detalhada"] += (" " + r_spec)
+                
+                else: 
+                    if current_item:
+                        if r_cat and dados[current_item]["catalogo"] and dados[current_item]["catalogo"] != r_cat:
+                            orphan_cat = r_cat
+                            if r_spec: orphan_spec += (" " + r_spec)
+                        else:
+                            if orphan_cat or orphan_spec:
+                                if r_cat: orphan_cat = r_cat
+                                if r_spec: orphan_spec += (" " + r_spec)
+                            else:
+                                if r_cat: dados[current_item]["catalogo"] = r_cat
+                                if r_spec: dados[current_item]["descricao_detalhada"] += (" " + r_spec)
+                    else:
+                        if r_cat: orphan_cat = r_cat
+                        if r_spec: orphan_spec += (" " + r_spec)
+
+            lista_dados = []
+            for k, v in dados.items():
+                # Remove espaços duplos e prepara a injeção
+                desc = " ".join(v["descricao_detalhada"].split())
+                lista_dados.append({
+                    "item": k,
+                    "catalogo": v["catalogo"],
+                    "descricao_detalhada": desc
+                })
+
+            if lista_dados:
+                df = pd.DataFrame(lista_dados)
+                for col in ['item', 'catalogo', 'descricao_detalhada']:
+                    if col not in df.columns: 
+                        df[col] = ""
                 return df[['item', 'catalogo', 'descricao_detalhada']]
             
             return pd.DataFrame()
             
         except Exception as e:
             print(f"Erro no TR: {e}")
-            return pd.DataFrame()
-
-            def salvar_item_atual():
-                if current_item[0] or current_item[1]:
-                    dados.append({
-                        'item': current_item[0],
-                        'descricao_detalhada': current_item[1],
-                        'catalogo': current_item[2]
-                    })
-
-            for row in linhas_brutas:
-                row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
-                while len(row) < 4: row.append("")
-                
-                texto_linha = "".join(row).strip().lower()
-                termos_ignorar = ["manual de modelos", "modelos de licitações", "licitações e contratos", "consultoria-geral", "da união", "secretaria de gestão", "gestão e inovação", "e inovação", "atualização:", "maio/2023", "câmara nacional"]
-                
-                if any(termo in texto_linha for termo in termos_ignorar) or not texto_linha or 'ITEM' in row[0].upper() or 'DESCRIÇÃO' in row[1].upper():
-                    continue
-
-                # Ignoramos row[1] (Descrição do TR), capturando apenas Item, Especificação e Catmat
-                r_item, r_spec, r_cat = row[0], row[2], row[3] 
-                
-                is_new = False
-                if r_item.isdigit():
-                    if current_item[0] != "": is_new = True
-                else:
-                    if r_cat != "" and current_item[2] != "": is_new = True
-                        
-                if is_new:
-                    salvar_item_atual()
-                    current_item = ["", "", ""]
-                
-                if r_item.isdigit(): current_item[0] = r_item
-                if r_item and not r_item.isdigit(): current_item[1] = (current_item[1] + " " + r_item).strip()
-                if r_spec: current_item[1] = (current_item[1] + " " + r_spec).strip()
-                if r_cat: current_item[2] = (current_item[2] + " " + r_cat).strip()
-
-            salvar_item_atual()
-
-            if dados:
-                df = pd.DataFrame(dados)
-                for col in ['descricao_detalhada', 'catalogo']:
-                    df[col] = df[col].apply(lambda x: " ".join(str(x).split()) if x else "")
-                # Retorna estritamente as 3 colunas de interesse
-                return df[['item', 'catalogo', 'descricao_detalhada']]
-            
-            return pd.DataFrame()
-            
-        except Exception as e:
-            print(f"Erro no TR: {e}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()

@@ -2,6 +2,7 @@ from PyQt6.QtCore import *
 from PyQt6.QtWidgets import QProgressDialog, QMessageBox
 from pathlib import Path
 import pandas as pd
+import re
 from modules.atas.widgets.worker_homologacao import Worker 
 # Importa a função de processamento da Homologação (NÃO APAGUE O ARQUIVO progresso_homolog.py)
 from modules.atas.widgets.progresso_homolog import save_to_dataframe
@@ -51,8 +52,33 @@ class GerarAtasController(QObject):
         self.worker.processing_complete.connect(self.finalizar_extracao_dupla)
         self.worker.start()
 
+    def limpar_descricao_curta(self, texto):
+        texto = str(texto)
+        if texto == "nan" or not texto: return ""
+        
+        # 1. Corta a string antes das especificações
+        partes = re.split(r'(?i)\b(Composição|Material|Tipo|Aplicação|Características|Apresentação|Norma|Cor|Tamanho|Aspecto|Dimensão|Medida|Formato)\b', texto)
+        cortado = partes[0].strip()
+        
+        # 2. Remove símbolos soltos no final
+        cortado = re.sub(r'[,;:\-\.]+$', '', cortado).strip()
+        
+        # 3. Limpeza de repetições irregulares (Ex: "Argamassa AC I Argamassa")
+        palavras = cortado.split()
+        if len(palavras) > 1:
+            # Ex: "Massa Plástica Massa Plástica"
+            if len(palavras) % 2 == 0:
+                metade = len(palavras) // 2
+                if " ".join(palavras[:metade]).lower() == " ".join(palavras[metade:]).lower():
+                    return " ".join(palavras[:metade])
+            
+            # Ex: "Argamassa AC I Argamassa" (apaga a última se for igual à primeira)
+            if palavras[0].lower() == palavras[-1].lower():
+                cortado = " ".join(palavras[:-1])
+                
+        return cortado.strip()
+
     def finalizar_extracao_dupla(self, extracted_data):
-        """Mescla os resultados e salva no banco de dados."""
         self.progress_dialog.setValue(100)
 
         if not extracted_data:
@@ -60,10 +86,8 @@ class GerarAtasController(QObject):
             return
 
         try:
+            from modules.atas.widgets.progresso_homolog import save_to_dataframe
             df_homolog = save_to_dataframe(extracted_data)
-        except ValueError as e:
-            QMessageBox.warning(self.view, "Erro de Extração", f"O sistema não encontrou itens válidos de Homologação.\n\nDetalhe técnico: {e}")
-            return
         except Exception as e:
             QMessageBox.critical(self.view, "Erro Crítico", f"Falha ao processar os Termos de Homologação: {e}")
             return
@@ -72,17 +96,25 @@ class GerarAtasController(QObject):
             QMessageBox.warning(self.view, "Aviso", "Nenhum item válido retornado da Homologação.")
             return
 
-        # ALINHAMENTO DE CHAVES PARA EVITAR COLUNAS VAZIAS (converte "16.0" para "16")
+        # ALINHAMENTO DE CHAVES
         df_homolog['item'] = pd.to_numeric(df_homolog['item'], errors='coerce').fillna(-1).astype(int).astype(str)
         self.df_tr_temp['item'] = pd.to_numeric(self.df_tr_temp['item'], errors='coerce').fillna(-1).astype(int).astype(str)
 
-        # CRUZAMENTO PERFEITO: 
-        # df_homolog traz -> 'item' e 'descricao'
-        # df_tr_temp traz -> 'item', 'catalogo' e 'descricao_detalhada'
+        # PREVENÇÃO CONTRA COLUNAS ESCONDIDAS
+        if 'descricao_detalhada' in df_homolog.columns:
+            df_homolog = df_homolog.drop(columns=['descricao_detalhada'])
+        if 'catalogo' in df_homolog.columns:
+            df_homolog = df_homolog.drop(columns=['catalogo'])
+
+        # CRUZAMENTO PERFEITO
         df_final = pd.merge(df_homolog, self.df_tr_temp, on='item', how='left')
 
+        # APLICA A LIMPEZA DA DESCRIÇÃO
+        if 'descricao' in df_final.columns:
+            df_final['descricao'] = df_final['descricao'].apply(self.limpar_descricao_curta)
+
         self.atualizar_banco_com_df(df_final)
-        QMessageBox.information(self.view, "Sucesso", "Dados do TR e Homologação cruzados com sucesso!")
+        QMessageBox.information(self.view, "Sucesso", "Dados cruzados e alinhados com sucesso!")
 
     def atualizar_banco_com_df(self, df):
         if df.empty:
