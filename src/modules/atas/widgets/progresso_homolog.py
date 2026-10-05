@@ -49,7 +49,6 @@ class ProcessamentoWidget(QWidget):
         self.start_time = 0
 
     def on_pdf_dir_changed(self, new_pdf_dir):
-        """Atualiza o diretório PDF em ProcessamentoDialog."""
         if hasattr(self, 'termo_homologacao_widget'):
             self.termo_homologacao_widget.pdf_dir = new_pdf_dir
             
@@ -89,7 +88,7 @@ class ProcessamentoWidget(QWidget):
         self.progress_bar.setValue(0)
         self.progress_bar.setFont(QFont('Arial', 12))
         layout_progress.addWidget(self.progress_bar)
-        
+
         main_layout.addLayout(layout_progress)
 
         self.context_area = QTextEdit()
@@ -99,12 +98,22 @@ class ProcessamentoWidget(QWidget):
 
         self.setup_button_layout(main_layout)
         self.setLayout(main_layout)
+
         self.update_pdf_count()
 
     def setup_button_layout(self, main_layout):
         button_layout = QHBoxLayout()
-        add_button_func_vermelho("Iniciar Processamento", self.start_processing, button_layout, "Clique para ver instruções", button_size=(300, 40))
+        
+        # Adicionado o botão que emite o sinal para gerar a planilha base
+        add_button_func("Gerar Planilha Base", "excel_down", self.gerarPlanilhaBaseClicked.emit, button_layout, self.icon_cache, "Cruza TR e Homologação para gerar planilha base", button_size=(250, 40))
+        add_button_func_vermelho("Iniciar Processamento", self.start_processing, button_layout, "Clique para iniciar", button_size=(300, 40))
+        
         main_layout.addLayout(button_layout)
+
+    def set_buttons_enabled(self, enabled: bool):
+        # Permite ao controller congelar os botões durante o processamento do Worker
+        for btn in self.findChildren(QPushButton):
+            btn.setEnabled(enabled)
 
     def abrir_pasta_pdf(self):
         if not self.pdf_dir.exists():
@@ -113,7 +122,6 @@ class ProcessamentoWidget(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Falha ao criar o diretório PDF: {e}")
                 return
-
         if self.pdf_dir.is_dir():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.pdf_dir)))
         else:
@@ -130,7 +138,6 @@ class ProcessamentoWidget(QWidget):
                 self.pdf_dir = Path(selected_folder)
                 if hasattr(self, 'main_window') and hasattr(self.main_window, 'pdf_dir_changed'):
                     self.main_window.pdf_dir_changed.emit(self.pdf_dir)
-                
                 self.update_pdf_count()
                 QMessageBox.information(self, "Pasta Definida", f"A pasta de trabalho foi alterada para:\n{self.pdf_dir}")
             
@@ -146,10 +153,8 @@ class ProcessamentoWidget(QWidget):
 
     def start_processing(self):
         self.current_dataframe = None
-
         if not self.verify_directories():
             return
-
         self.start_time = time.time()
         self.timer.timeout.connect(self.update_time)
         self.timer.start(1000)
@@ -160,13 +165,14 @@ class ProcessamentoWidget(QWidget):
         self.worker_thread.progress_signal.connect(self.progress_bar.setValue)
 
         self.worker_thread.start()
+        self.set_buttons_enabled(False) # Bloqueia botões
 
     def finalizar_processamento_homologacao(self, extracted_data):
         self.update_context("Processamento concluído.")
         self.timer.stop() 
+        self.set_buttons_enabled(True) # Libera botões
         elapsed_time = int(time.time() - self.start_time)
         self.time_label.setText(f"Tempo total: {elapsed_time}s")
-
         self.homologacao_dataframe = save_to_dataframe(extracted_data)
         self.atualizar_ou_inserir_controle_homologacao()
 
@@ -192,7 +198,6 @@ class ProcessamentoWidget(QWidget):
 
         if not self.recriar_tabela(table_name):
             return
-
         if not self.copiar_dados_controle_atas(table_name):
             return
 
@@ -326,10 +331,8 @@ class RegistroSICAFDialog(QDialog):
         main_layout = QHBoxLayout(self)
         left_layout = self.criar_layout_esquerdo()
         main_layout.addLayout(left_layout)
-
         right_widget = self.criar_layout_direito()
         main_layout.addWidget(right_widget)
-
         self.setLayout(main_layout)
         self.atualizar_lista()
 
@@ -345,7 +348,7 @@ class RegistroSICAFDialog(QDialog):
         processing_button = self.create_button(
             text="Processamento de SICAF",
             icon=self.icon_cache["processing"],
-            callback=self.iniciar_processamento_sicaf,
+            callback=self.iniciar_processamento_sicaf,  
             tooltip_text="Iniciar processamento do SICAF"
         )
         left_layout.addWidget(processing_button, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -357,12 +360,13 @@ class RegistroSICAFDialog(QDialog):
             QMessageBox.warning(self, "Erro", "A pasta SICAF não existe.")
             return
         
-        if self.update_context:
+        if self.update_context:  
             self.update_context("Iniciando o processamento dos arquivos SICAF...")
         
         self.worker = WorkerSICAF(self.sicaf_dir)
         self.worker.processing_complete.connect(self.on_processing_complete)
-        self.worker.update_context_signal.connect(self.update_context)
+        self.worker.update_context_signal.connect(self.update_context)  
+
         self.worker.start()
 
     def on_processing_complete(self, dataframes):
@@ -376,7 +380,7 @@ class RegistroSICAFDialog(QDialog):
                 municipio = row.get('municipio')
                 telefone = row.get('telefone')
                 email = row.get('email')
-                responsavel_legal = row.get('nome')
+                responsavel_legal = row.get('nome')  
 
                 check_query = "SELECT 1 FROM registro_sicaf WHERE cnpj = ?"
                 exists = self.database_ata_manager.execute_query(check_query, (cnpj,))
@@ -384,14 +388,8 @@ class RegistroSICAFDialog(QDialog):
                 if exists:
                     update_query = """
                     UPDATE registro_sicaf SET 
-                        empresa = ?, 
-                        nome_fantasia = ?, 
-                        endereco = ?, 
-                        cep = ?, 
-                        municipio = ?, 
-                        telefone = ?, 
-                        email = ?, 
-                        responsavel_legal = ?
+                        empresa = ?, nome_fantasia = ?, endereco = ?, cep = ?, 
+                        municipio = ?, telefone = ?, email = ?, responsavel_legal = ?
                     WHERE cnpj = ?
                     """
                     params = (empresa, nome_fantasia, endereco, cep, municipio, telefone, email, responsavel_legal, cnpj)
@@ -400,7 +398,6 @@ class RegistroSICAFDialog(QDialog):
                         print(f"Registro de {empresa} atualizado com sucesso.")
                     except Exception as e:
                         logging.error(f"Erro ao atualizar o registro de {empresa}: {e}")
-                        QMessageBox.warning(self, "Erro", f"Erro ao atualizar o registro de {empresa}: {e}")
                 else:
                     insert_query = """
                     INSERT INTO registro_sicaf (empresa, cnpj, nome_fantasia, endereco, cep, municipio, telefone, email, responsavel_legal)
@@ -412,10 +409,9 @@ class RegistroSICAFDialog(QDialog):
                         print(f"Registro de {empresa} inserido com sucesso.")
                     except Exception as e:
                         logging.error(f"Erro ao inserir o registro de {empresa}: {e}")
-                        QMessageBox.warning(self, "Erro", f"Erro ao inserir o registro de {empresa}: {e}")
         
         QMessageBox.information(self, "Processamento Completo", "Todos os registros foram processados e salvos no banco de dados com sucesso.")
-        print("Processamento SICAF concluído e registros salvos no banco de dados.")
+        print("Processamento SICAF concluído.")
 
     def create_button(self, text, icon, callback, tooltip_text, icon_size=QSize(30, 30), button_size=QSize(120, 30)):
         btn = QPushButton(text)
@@ -425,20 +421,14 @@ class RegistroSICAFDialog(QDialog):
         btn.clicked.connect(callback)
         btn.setToolTip(tooltip_text)
         btn.setFixedSize(button_size.width(), button_size.height())
-
-        btn.setStyleSheet("""
-        QPushButton {
-            font-size: 12pt;
-            padding: 5px;
-        }
-        """)
+        btn.setStyleSheet("QPushButton { font-size: 12pt; padding: 5px; }")
         return btn
 
     def criar_legenda_layout(self):
         legenda_layout = QHBoxLayout()
         legenda_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-
         legenda_text = QLabel("Legenda: ")
+        
         confirm_icon = QLabel()
         confirm_icon.setPixmap(self.icon_cache["check"].pixmap(24, 24))
         confirm_text = QLabel("SICAF encontrado")
@@ -459,7 +449,6 @@ class RegistroSICAFDialog(QDialog):
         right_widget = QWidget()
         right_widget.setFixedWidth(350)
         right_layout = QVBoxLayout(right_widget)
-
         top_right_layout = self.criar_botoes_direitos()
         right_layout.addLayout(top_right_layout)
 
@@ -540,10 +529,7 @@ class RegistroSICAFDialog(QDialog):
             exists = self.database_ata_manager.execute_query(check_cnpj_query, (cnpj,))
 
             if not exists:
-                insert_query = """
-                INSERT INTO registro_sicaf (empresa, cnpj)
-                VALUES (?, ?)
-                """
+                insert_query = "INSERT INTO registro_sicaf (empresa, cnpj) VALUES (?, ?)"
                 try:
                     self.database_ata_manager.execute_query(insert_query, (empresa, cnpj))
                 except Exception as e:
@@ -591,7 +577,6 @@ class RegistroSICAFDialog(QDialog):
     def abrir_pasta_sicaf(self):
         if not self.sicaf_dir.exists():
             self.sicaf_dir.mkdir(parents=True, exist_ok=True)
-            
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.sicaf_dir)))
 
     def get_icon_for_cnpj(self, cnpj):
@@ -600,7 +585,6 @@ class RegistroSICAFDialog(QDialog):
             result = self.database_ata_manager.execute_query(query, (cnpj,))
             return self.icon_cache["check"] if result else self.icon_cache["cancel"]
         except Exception as e:
-            QMessageBox.critical(self, "Erro no Banco de Dados", f"Carregamento SICAF: Erro ao acessar o banco de dados: {e}")
             return self.icon_cache["cancel"]
 
     def load_icons(self):
@@ -609,11 +593,9 @@ class RegistroSICAFDialog(QDialog):
             "check": self.icons_dir / "check.png",
             "cancel": self.icons_dir / "cancel.png"
         }
-
         for key, path in icon_paths.items():
             icon = QIcon(str(path)) if path.exists() else QIcon()
             icon_cache[key] = icon
-
         return icon_cache
 
     def copiar_para_area_de_transferencia(self, cnpj):
@@ -626,16 +608,15 @@ class RegistroSICAFDialog(QDialog):
         msg_box.setText(f"O CNPJ {cnpj} foi copiado para a área de transferência.")
         msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
         
-        QTimer.singleShot(2000, msg_box.close) 
+        QTimer.singleShot(2000, msg_box.close)
         msg_box.exec()
+
 
 padrao_1 = (r"UASG\s+(?P<uasg>\d+)\s+-\s+(?P<orgao_responsavel>.+?)\s+PREGÃO\s+(?P<num_pregao>\d+)/(?P<ano_pregao>\d+)")
 padrao_srp = r"(?P<srp>SRP - Registro de Preço|SISPP - Tradicional)"
 padrao_objeto = (r"Objeto da compra:\s*(?P<objeto>.*?)\s*Entrega de propostas:")
-
 padrao_grupo2 = (
-    r"Item\s+(?P<item>\d+)(?:\s+do\s+Grupo\s+G(?P<grupo>\d+))?\s+-\s+(?P<descricao>.*?)"
-    r"(?=\s*(?:Tratamento Diferenciado|Critério de julgamento|Valor estimado|Quantidade)).*?"
+    r"Item\s+(?P<item>\d+)(?:\s+do\s+Grupo\s+G(?P<grupo>\d+))?.*?"
     r"Valor\s+estimado:\s+R\$\s+(?P<valor>[\d,\.]+).*?"
     r"(?:Critério\s+de\s+julgamento:\s+(?P<crit_julgamento>.*?))?\s*"
     r"Quantidade:\s+(?P<quantidade>\d+)\s+"
@@ -643,10 +624,8 @@ padrao_grupo2 = (
     r"Situação:\s+(?P<situacao>Adjudicado e Homologado|Deserto e Homologado|Fracassado e Homologado|Anulado e Homologado|Revogado e Homologado)"
 )
 
-# REGEX ATUALIZADA: Agora captura a descrição do item diretamente do Termo de Homologação
 padrao_item_quantidade = (
-    r"Item\s+(?P<item>\d+)\s+-\s+(?P<descricao>.*?)"
-    r"(?=\s*(?:Tratamento Diferenciado|Critério de julgamento|Valor estimado|Quantidade)).*?"
+    r"Item\s+(?P<item>\d+)\s+-\s+.*?"
     r"Quantidade:\s+(?P<quantidade>\d+)\s+"
 )
 
@@ -689,7 +668,6 @@ def processar_item(match, conteudo: str, ultima_posicao_processada: int, padrao_
     item = match.groupdict()
     item_data = {
         "item": int(item['item']) if 'item' in item and item['item'].isdigit() else 'N/A',
-        "descricao": item.get('descricao', '').strip(), # ADICIONADO: Captura a descrição curta
         "grupo": item.get('grupo', 'N/A'),
         "valor_estimado": item.get('valor', 'N/A'),
         "quantidade": item.get('quantidade', 'N/A'),
@@ -706,6 +684,7 @@ def processar_item(match, conteudo: str, ultima_posicao_processada: int, padrao_
             item_data["cnpj"] = match_3.group('cnpj').strip()
 
             bloco_valores = match_3.group('bloco_valores')
+            
             match_lance = re.search(r"melhor\s+lance\s*:\s*R\$\s*([\d,.]+)", bloco_valores)
             item_data["melhor_lance"] = match_lance.group(1) if match_lance else 'N/A'
 
@@ -718,7 +697,7 @@ def processar_item(match, conteudo: str, ultima_posicao_processada: int, padrao_
                 item_data["marca_fabricante"] = match_4.group('marca_fabricante').strip() or 'N/A'
                 item_data["modelo_versao"] = match_4.group('modelo_versao').strip() or 'N/A'
 
-    return item_data, ultima_posicao_processada
+    return item_data, ultima_posicao_processada 
 
 def create_dataframe_from_pdf_files(extracted_data):
     if not isinstance(extracted_data, list):
@@ -730,23 +709,16 @@ def create_dataframe_from_pdf_files(extracted_data):
     for idx, item in enumerate(extracted_data):
         if isinstance(item, dict) and 'text' in item and isinstance(item['text'], str):
             content = item['text']
-            print(f"\nProcessando item {idx + 1} de {len(extracted_data)}:")
-            print(f"Conteúdo: {content[:100]}...") 
-
+            
             uasg_pregao_data = extrair_uasg_e_pregao(content, padrao_1, padrao_srp, padrao_objeto)
-            print(f"Dados UASG e Pregão extraídos: {uasg_pregao_data}")
-
             compra_data = extrair_objeto_da_compra(content)
-            print(f"Dados de Objeto da Compra extraídos: {compra_data}")
-
             items_data = identificar_itens_e_grupos(content, padrao_grupo2, padrao_item2, padrao_3, padrao_4, pd.DataFrame())
-            print(f"Dados dos Itens e Grupos extraídos: {items_data}")
 
             for item_data in items_data:
                 if isinstance(item_data, dict):
                     all_data.append({
                         **uasg_pregao_data,
-                        "objeto": compra_data, 
+                        "objeto": compra_data,  
                         **item_data
                     })
                 else:
@@ -758,9 +730,7 @@ def create_dataframe_from_pdf_files(extracted_data):
         raise ValueError("Nenhum dado válido foi encontrado para criar o DataFrame.")
 
     dataframe_licitacao = pd.DataFrame(all_data)
-    print("\nDataFrame criado com os dados extraídos:")
-    print(dataframe_licitacao.head()) 
-
+    
     if "item" not in dataframe_licitacao.columns:
         raise ValueError("A coluna 'item' não foi encontrada no DataFrame.")
     
@@ -771,30 +741,17 @@ def identificar_itens_e_grupos(conteudo: str, padrao_grupo2: str, padrao_item2: 
     itens_data = []
     itens = buscar_itens(conteudo, padrao_grupo2, padrao_item2)
 
-    print(f"Total de itens encontrados: {len(itens)}")
-    if len(itens) == 0:
-        print("Nenhuma correspondência encontrada para os padrões fornecidos.")
-    else:
-        print(f"Itens encontrados: {[match.groupdict() for match in itens]}")
-
     ultima_posicao_processada = 0
-
     for idx, match in enumerate(itens):
         item_data, ultima_posicao_processada = processar_item(match, conteudo, ultima_posicao_processada, padrao_3, padrao_4)
-        
-        print(f"\nProcessando item {idx + 1}: {item_data}")
-        
         item_data = process_cnpj_data(item_data)
-        print(f"Item {idx + 1} após processar dados CNPJ: {item_data}")
-
         itens_data.append(item_data)
 
-    print(f"\nItens finais processados: {itens_data}")
     return itens_data
 
 def process_cnpj_data(cnpj_dict):
     for field in ["valor_estimado", "melhor_lance", "valor_negociado"]:
-        valor = cnpj_dict.get(field, 'N/A') 
+        valor = cnpj_dict.get(field, 'N/A')  
         if isinstance(valor, str):
             try:
                 cnpj_dict[field] = float(valor.replace(".", "").replace(",", "."))
@@ -826,36 +783,25 @@ def process_cnpj_data(cnpj_dict):
     return cnpj_dict
 
 def buscar_itens(conteudo: str, padrao_grupo2: str, padrao_item2: str) -> list:
-    # Volta a converter todas as quebras de linha e espaços duplos em um espaço simples (100% seguro)
     conteudo = re.sub(r'\s+', ' ', conteudo).strip()
 
     matches_item2 = list(re.finditer(padrao_item2, conteudo, re.DOTALL | re.IGNORECASE))
     if matches_item2:
-        print(f"Total de correspondências para padrao_item2: {len(matches_item2)}")
-        for idx, match in enumerate(matches_item2, start=1):
-            print(f"Correspondência {idx} para padrao_item2: {match.groupdict()}")
-        return matches_item2 
+        return matches_item2  
 
     matches_grupo2 = list(re.finditer(padrao_grupo2, conteudo, re.DOTALL | re.IGNORECASE))
     if matches_grupo2:
-        print(f"Total de correspondências para padrao_grupo2: {len(matches_grupo2)}")
-        for idx, match in enumerate(matches_grupo2, start=1):
-            print(f"Correspondência {idx} para padrao_grupo2: {match.groupdict()}")
-        return matches_grupo2 
+        return matches_grupo2  
 
-    print("Nenhuma correspondência encontrada para padrao_item2 ou padrao_grupo2.")
-    return [] 
+    return []  
 
 def extrair_objeto_da_compra(conteudo: str) -> str:
     padrao_objeto_forte = r"Objeto\s+da\s+compra\s*:\s*(?P<objeto>.*?)\s*Entrega\s+de\s+propostas\s*:"
     match = re.search(padrao_objeto_forte, conteudo, re.DOTALL | re.IGNORECASE)
 
     if match:
-        print("Padrão Objeto encontrado:")
-        print(f"Valor do Objeto: {match.group('objeto')}")
         return match.group("objeto").strip()
     else:
-        print("Padrão Objeto não encontrado.")
         return "N/A"
     
 def extrair_uasg_e_pregao(conteudo: str, padrao_1: str, padrao_srp: str, padrao_objeto: str) -> dict: 
@@ -870,26 +816,7 @@ def extrair_uasg_e_pregao(conteudo: str, padrao_1: str, padrao_srp: str, padrao_
         padrao_objeto_forte = r"Objeto\s+da\s+compra\s*:\s*(?P<objeto>.*?)\s*Entrega\s+de\s+propostas\s*:"
         match_forte = re.search(padrao_objeto_forte, conteudo, re.DOTALL | re.IGNORECASE)
         if match_forte:
-            print("Padrão Objeto Forte encontrado:")
-            print(f"Valor do Objeto: {match_forte.group('objeto')}")
             objeto_valor = match_forte.group("objeto").strip()
-        else:
-            print("Padrão Objeto Forte não encontrado.")
-
-    if match:
-        print("Padrão 1 encontrado:")
-    else:
-        print("Padrão 1 não encontrado.")
-
-    if match2:
-        print("Padrão SRP encontrado")
-    else:
-        print("Padrão SRP não encontrado.")
-
-    if match3 or match_forte:
-        print("Padrão Objeto encontrado")
-    else:
-        print("Padrão Objeto não encontrado.")
 
     if match:
         return {

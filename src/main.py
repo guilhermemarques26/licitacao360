@@ -7,6 +7,9 @@ from assets.styles.styles import get_menu_button_style, get_menu_button_activate
 from modules.widgets import *
 from modules.config.config_widget import ConfigManager
 from modules.settings.settings_widget import SettingsWidget
+import os
+import sys
+import ctypes
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -21,6 +24,7 @@ class MainWindow(QMainWindow):
 
         # --- 2. Crie uma instância do novo widget ---
         self.settings_page = SettingsWidget(self)
+        
     # ====== SETUP DA INTERFACE ======
 
     def setup_ui(self):
@@ -33,7 +37,13 @@ class MainWindow(QMainWindow):
     def configure_window(self):
         """Configurações básicas da janela principal."""
         self.setWindowTitle("Licitação 360")
-        self.setWindowIcon(self.icons["brasil"])
+        
+        # Resolvemos o conflito! Agora a janela apenas garante que puxa o ícone se ele 
+        # já estiver disponível no dicionário, sem tentar "forçar" um caminho que atrapalha a App global
+        if "icon3" in self.icons:
+            self.setWindowIcon(self.icons["icon3"])
+        elif "icon3.ico" in self.icons:
+            self.setWindowIcon(self.icons["icon3.ico"])
         
         # Posiciona a janela no canto superior esquerdo
         screen_geometry = self.screen().geometry()
@@ -400,11 +410,27 @@ class MainWindow(QMainWindow):
         event.accept() if reply == QMessageBox.StandardButton.Yes else event.ignore()
                     
 if __name__ == "__main__":
-    import sys
-
     app = QApplication(sys.argv)
-    #dark_theme = get_full_dark_theme()
-    #app.setStyleSheet(dark_theme)
+
+    # 1. TENTA ENGANAR O CACHE DO WINDOWS
+    try:
+        myappid = 'licitacao360.versao_3_4_1_fix_definitivo' 
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except Exception as e:
+        print(f"Não foi possível forçar o ícone: {e}")
+
+    # 2. RESOLUÇÃO ABSOLUTA DO CAMINHO DO ÍCONE
+    # Independentemente de onde o terminal rodar, nós procuramos a pasta 'assets/icons/icon3.ico' baseada no diretório atual
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    caminho_icone = os.path.join(current_dir, "assets", "icons", "icon3.ico")
+    
+    if os.path.exists(caminho_icone):
+        icone_global = QIcon(caminho_icone)
+        # Força o ícone na aplicação global do Windows
+        app.setWindowIcon(icone_global)
+    else:
+        print(f"ATENÇÃO CRÍTICA: O arquivo 'icon3.ico' não existe em:\n{caminho_icone}")
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

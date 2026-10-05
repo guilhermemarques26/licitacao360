@@ -1,11 +1,6 @@
 from PyQt6.QtCore import *
-from PyQt6.QtWidgets import QProgressDialog, QMessageBox
-from pathlib import Path
-import pandas as pd
-import re
+from PyQt6.QtWidgets import QProgressDialog, QMessageBox, QFileDialog, QApplication
 from modules.atas.widgets.worker_homologacao import Worker 
-# Importa a função de processamento da Homologação (NÃO APAGUE O ARQUIVO progresso_homolog.py)
-from modules.atas.widgets.progresso_homolog import save_to_dataframe
 
 class GerarAtasController(QObject): 
     def __init__(self, icons, view, model):
@@ -14,149 +9,98 @@ class GerarAtasController(QObject):
         self.view = view
         self.model = model.setup_model("controle_atas")
         self.worker = None
-        self.df_tr_temp = pd.DataFrame()
         self.setup_connections()
 
     def setup_connections(self):
         self.view.instructionSignal.connect(self.instrucoes)
         self.view.trSignal.connect(self.termo_referencia)
+        self.view.homologSignal.connect(self.termo_homologacao)
         self.view.sicafSignal.connect(self.sicaf_widget)
         self.view.atasSignal.connect(self.gerar_atas)
 
+        self.view.tr_widget.abrirTabelaNova.connect(self.abrir_tabela_nova)
         self.view.tr_widget.configurarSqlModelSignal.connect(self.configurar_sql_model)
-        self.view.tr_widget.limparTabelaSignal.connect(self.limpar_tabela) 
-        
-        # Conexão da Extração Dupla
-        self.view.tr_widget.iniciarExtracaoDuplaSignal.connect(self.iniciar_extracao_dupla)
+
+        self.view.tr_widget.carregarTabela.connect(self.caregar_tabela_com_dados)
         self.model.tabelaCarregada.connect(self.configurar_sql_model)
 
-    def iniciar_extracao_dupla(self, caminho_tr, caminho_homolog):
-        """Orquestra a extração do TR e a extração da Homologação."""
-        # 1. Extração síncrona do Termo de Referência
-        self.df_tr_temp = self.view.tr_widget.extrair_dados_tr(caminho_tr)
-        
-        if self.df_tr_temp.empty:
-            QMessageBox.warning(self.view, "Erro", "Não foi possível extrair dados estruturados do Termo de Referência.")
+        if hasattr(self.view.homolog_widget, 'gerarPlanilhaBaseClicked'):
+             self.view.homolog_widget.gerarPlanilhaBaseClicked.connect(self.iniciar_geracao_planilha_base)
+    
+    def iniciar_geracao_planilha_base(self):
+        pdf_dir = self.view.homolog_widget.pdf_dir
+        if not pdf_dir or not pdf_dir.exists():
+            print("Erro: O diretório de PDFs não foi selecionado.")
             return
 
-        # 2. Configura a barra de progresso Popup para o Worker da Homologação
-        self.progress_dialog = QProgressDialog("Lendo Termos de Homologação...", "Cancelar", 0, 100, self.view)
-        self.progress_dialog.setWindowTitle("Processamento")
-        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        self.progress_dialog.setAutoClose(True)
-        self.progress_dialog.setValue(0)
+        self.worker = Worker(pdf_dir=pdf_dir, modo='tabela_base')
+        self.worker.progress_signal.connect(self.view.homolog_widget.progress_bar.setValue)
+        self.worker.update_context_signal.connect(self.view.homolog_widget.update_context)
+        self.worker.finished.connect(self.finalizar_worker)
+        self.worker.tabela_base_pronta.connect(self.salvar_planilha_base)
 
-        # 3. Inicia a Thread para ler os múltiplos PDFs de Homologação
-        self.worker = Worker(pdf_dir=Path(caminho_homolog), modo='completo')
-        self.worker.progress_signal.connect(self.progress_dialog.setValue)
-        self.worker.processing_complete.connect(self.finalizar_extracao_dupla)
         self.worker.start()
-
-    def limpar_descricao_curta(self, texto):
-        texto = str(texto)
-        if texto == "nan" or not texto: return ""
-        
-        # 1. Corta a string antes das especificações
-        partes = re.split(r'(?i)\b(Composição|Material|Tipo|Aplicação|Características|Apresentação|Norma|Cor|Tamanho|Aspecto|Dimensão|Medida|Formato)\b', texto)
-        cortado = partes[0].strip()
-        
-        # 2. Remove símbolos soltos no final
-        cortado = re.sub(r'[,;:\-\.]+$', '', cortado).strip()
-        
-        # 3. Limpeza de repetições irregulares (Ex: "Argamassa AC I Argamassa")
-        palavras = cortado.split()
-        if len(palavras) > 1:
-            # Ex: "Massa Plástica Massa Plástica"
-            if len(palavras) % 2 == 0:
-                metade = len(palavras) // 2
-                if " ".join(palavras[:metade]).lower() == " ".join(palavras[metade:]).lower():
-                    return " ".join(palavras[:metade])
-            
-            # Ex: "Argamassa AC I Argamassa" (apaga a última se for igual à primeira)
-            if palavras[0].lower() == palavras[-1].lower():
-                cortado = " ".join(palavras[:-1])
-                
-        return cortado.strip()
-
-    def finalizar_extracao_dupla(self, extracted_data):
-        self.progress_dialog.setValue(100)
-
-        if not extracted_data:
-            QMessageBox.warning(self.view, "Aviso", "Nenhum arquivo PDF foi encontrado na pasta de Homologação.")
-            return
-
-        try:
-            from modules.atas.widgets.progresso_homolog import save_to_dataframe
-            df_homolog = save_to_dataframe(extracted_data)
-        except Exception as e:
-            QMessageBox.critical(self.view, "Erro Crítico", f"Falha ao processar os Termos de Homologação: {e}")
-            return
-
-        if df_homolog.empty:
-            QMessageBox.warning(self.view, "Aviso", "Nenhum item válido retornado da Homologação.")
-            return
-
-        # ALINHAMENTO DE CHAVES
-        df_homolog['item'] = pd.to_numeric(df_homolog['item'], errors='coerce').fillna(-1).astype(int).astype(str)
-        self.df_tr_temp['item'] = pd.to_numeric(self.df_tr_temp['item'], errors='coerce').fillna(-1).astype(int).astype(str)
-
-        # PREVENÇÃO CONTRA COLUNAS ESCONDIDAS
-        if 'descricao_detalhada' in df_homolog.columns:
-            df_homolog = df_homolog.drop(columns=['descricao_detalhada'])
-        if 'catalogo' in df_homolog.columns:
-            df_homolog = df_homolog.drop(columns=['catalogo'])
-
-        # CRUZAMENTO PERFEITO
-        df_final = pd.merge(df_homolog, self.df_tr_temp, on='item', how='left')
-
-        # APLICA A LIMPEZA DA DESCRIÇÃO
-        if 'descricao' in df_final.columns:
-            df_final['descricao'] = df_final['descricao'].apply(self.limpar_descricao_curta)
-
-        self.atualizar_banco_com_df(df_final)
-        QMessageBox.information(self.view, "Sucesso", "Dados cruzados e alinhados com sucesso!")
-
-    def atualizar_banco_com_df(self, df):
+        self.view.homolog_widget.set_buttons_enabled(False)
+    
+    def salvar_planilha_base(self, df):
         if df.empty:
+            print("AVISO: O DataFrame está vazio. Nenhum arquivo será salvo.")
             return
 
-        # Limpa o banco antes da inserção
-        num_rows = self.model.rowCount()
-        for i in range(num_rows - 1, -1, -1):
-            self.model.removeRow(i)
-        self.model.submitAll()
+        caminho_inicial = "planilha_base_licitacao.xlsx"
+        caminho_arquivo, _ = QFileDialog.getSaveFileName(
+            self.view,
+            "Salvar Planilha Base",
+            caminho_inicial,
+            "Arquivos Excel (*.xlsx);;Todos os Arquivos (*)"
+        )
 
-        # O modelo SQL tem um array de column_names já programado no seu model.py
-        db_columns = self.model.column_names
+        if caminho_arquivo:
+            try:
+                df.to_excel(caminho_arquivo, index=False)
+                self.view.homolog_widget.update_context(f"Sucesso! Planilha salva em: {caminho_arquivo}")
+            except Exception as e:
+                self.view.homolog_widget.update_context(f"ERRO ao salvar a planilha: {e}")
 
-        # Insere o DataFrame cruzado respeitando as colunas do Banco
-        for index, row in df.iterrows():
-            record = self.model.record()
-            for col in db_columns:
-                if col in df.columns and pd.notna(row[col]):
-                    record.setValue(col, str(row[col]))
-            
-            self.model.insertRecord(-1, record)
-        
-        if self.model.submitAll():
-            self.model.select() 
-        else:
-            print(f"Erro ao salvar no banco: {self.model.lastError().text()}")
-
-    def limpar_tabela(self):
-        resposta = QMessageBox.question(self.view.tr_widget, "Confirmar Limpeza", "Tem certeza de que deseja apagar todos os itens da tabela atual?\nIsso não pode ser desfeito.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if resposta == QMessageBox.StandardButton.Yes:
-            num_rows = self.model.rowCount()
-            for i in range(num_rows - 1, -1, -1):
-                self.model.removeRow(i)
-            if self.model.submitAll():
-                self.model.select()  
-            else:
-                QMessageBox.warning(self.view.tr_widget, "Erro", f"Erro ao limpar banco de dados: {self.model.lastError().text()}")
+    def finalizar_worker(self):
+        self.view.homolog_widget.update_context("Processo finalizado.")
+        self.view.homolog_widget.set_buttons_enabled(True)
+        self.worker = None
 
     def configurar_sql_model(self):
         self.view.tr_widget.table_view.setModel(self.model)
         self.view.configurar_visualizacao_tabela_tr(self.view.tr_widget.table_view)
+
+    # ========================================================
+    # ANIMAÇÕES DE CARREGAMENTO ADICIONADAS
+    # ========================================================
+    def abrir_tabela_nova(self):
+        loading = QProgressDialog("Gerando e abrindo a nova planilha Excel...\nPor favor, aguarde.", None, 0, 0, self.view)
+        loading.setWindowTitle("Processando")
+        loading.setWindowModality(Qt.WindowModality.WindowModal)
+        loading.setMinimumDuration(0) 
+        loading.show()
+        QApplication.processEvents()
+        try:
+            self.model.abrir_tabela_nova()
+        except Exception as e:
+            QMessageBox.critical(self.view, "Erro", f"Erro ao abrir tabela vazia: {e}")
+        finally:
+            loading.close()
+
+    def caregar_tabela_com_dados(self):
+        loading = QProgressDialog("Lendo a planilha e atualizando o banco de dados...\nPor favor, aguarde.", None, 0, 0, self.view)
+        loading.setWindowTitle("Processando")
+        loading.setWindowModality(Qt.WindowModality.WindowModal)
+        loading.setMinimumDuration(0) 
+        loading.show()
+        QApplication.processEvents()
+        try:
+            self.model.carregar_tabela()
+        except Exception as e:
+            QMessageBox.critical(self.view, "Erro", f"Erro ao importar tabela: {e}")
+        finally:
+            loading.close()
 
     def instrucoes(self):
         self.view.content_area.setCurrentWidget(self.view.instrucoes_widget)
@@ -165,6 +109,9 @@ class GerarAtasController(QObject):
         self.view.content_area.setCurrentWidget(self.view.tr_widget)
         self.view.tr_widget.table_view.setModel(self.model)
         self.view.configurar_visualizacao_tabela_tr(self.view.tr_widget.table_view)
+
+    def termo_homologacao(self):
+        self.view.content_area.setCurrentWidget(self.view.homolog_widget)
 
     def sicaf_widget(self):
         self.view.content_area.setCurrentWidget(self.view.sicaf_widget)
