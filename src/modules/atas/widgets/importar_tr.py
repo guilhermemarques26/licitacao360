@@ -3,6 +3,8 @@ import pandas as pd
 import fitz
 import re
 import openpyxl
+import gc
+import json
 from openpyxl.styles import Font
 from pathlib import Path
 from PyQt6.QtWidgets import *
@@ -32,9 +34,6 @@ class AlertaFaltaDelegate(QStyledItemDelegate):
         else:
             super().paint(painter, option, index)
 
-# =================================================================
-# DIÁLOGO DE CONFIGURAÇÃO DE EXTRAÇÃO (OPÇÃO 1 E OPÇÃO 2)
-# =================================================================
 class ConfigExtracaoDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,20 +69,35 @@ class ConfigExtracaoDialog(QDialog):
         form_layout = QFormLayout(self.custom_container)
         
         self.input_item = QLineEdit()
-        self.input_item.setPlaceholderText("Deixe em branco para usar o padrão (Item, Nº)")
+        self.input_item.setPlaceholderText("Obrigatório para encontrar as linhas (Ex: Item, Nº)")
         form_layout.addRow("Coluna do Item:", self.input_item)
 
         self.input_cat = QLineEdit()
-        self.input_cat.setPlaceholderText("Deixe em branco para usar o padrão (CATMAT, Código)")
+        self.input_cat.setPlaceholderText("Deixe em branco para preencher manualmente")
         form_layout.addRow("Coluna do Catálogo:", self.input_cat)
 
         self.input_desc = QLineEdit()
-        self.input_desc.setPlaceholderText("Ex: Nome, Objeto, Descrição")
-        form_layout.addRow("Coluna da Descrição (Curta):", self.input_desc)
+        self.input_desc.setPlaceholderText("Deixe em branco para preencher manualmente")
+        form_layout.addRow("Coluna da Descrição:", self.input_desc)
+
+        self.cb_advanced_desc = QCheckBox("Preencher descrição com parâmetro avançado\n(Extrair as 3 primeiras palavras da especificação)")
+        self.cb_advanced_desc.setStyleSheet("color: #1A5276; font-weight: bold; font-size: 11px;")
+        self.cb_advanced_desc.setEnabled(False)
+        form_layout.addRow("", self.cb_advanced_desc)
 
         self.input_desc_det = QLineEdit()
         self.input_desc_det.setPlaceholderText("Ex: Detalhamento, Especificação")
         form_layout.addRow("Coluna da Especificação:", self.input_desc_det)
+
+        def atualizar_checkbox_avancado():
+            if self.input_desc.text().strip() == "" and self.input_desc_det.text().strip() != "":
+                self.cb_advanced_desc.setEnabled(True)
+            else:
+                self.cb_advanced_desc.setEnabled(False)
+                self.cb_advanced_desc.setChecked(False)
+
+        self.input_desc.textChanged.connect(atualizar_checkbox_avancado)
+        self.input_desc_det.textChanged.connect(atualizar_checkbox_avancado)
 
         self.custom_container.setEnabled(False)
         layout.addWidget(self.custom_container)
@@ -100,18 +114,19 @@ class ConfigExtracaoDialog(QDialog):
     def get_config(self):
         return {
             'opcao': 1 if self.rb_opcao1.isChecked() else 2,
-            'col_item': self.input_item.text().strip().lower() or 'item',
-            'col_cat': self.input_cat.text().strip().lower() or 'catmat',
-            'col_desc': self.input_desc.text().strip().lower() or 'descrição',
-            'col_desc_det': self.input_desc_det.text().strip().lower() or 'especificação'
+            'col_item': self.input_item.text().strip().lower(),
+            'col_cat': self.input_cat.text().strip().lower(),
+            'col_desc': self.input_desc.text().strip().lower(),
+            'col_desc_det': self.input_desc_det.text().strip().lower(),
+            'adv_desc': self.cb_advanced_desc.isChecked() if hasattr(self, 'cb_advanced_desc') else False
         }
-
 
 class TermoReferenciaWidget(QWidget): 
     abrirTabelaNova = pyqtSignal()
     carregarTabela = pyqtSignal()  
     configurarSqlModelSignal = pyqtSignal() 
     extrairTrSignal = pyqtSignal() 
+    limparTabelaSignal = pyqtSignal() 
 
     def __init__(self, parent, icons):
         super().__init__(parent)
@@ -121,32 +136,65 @@ class TermoReferenciaWidget(QWidget):
         self.icons = icons
         
         self.layout = QVBoxLayout(self)
-        title_layout = QHBoxLayout()
-        title_layout.addStretch()
         
+        # 1. TÍTULO PRINCIPAL
         title = QLabel("Especificação do Termo de Referência")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setFont(QFont('Arial', 16, QFont.Weight.Bold))
-        title_layout.addWidget(title)
+        self.layout.addWidget(title)
 
-        add_button("Tabela em Branco", "excel_down", self.abrirTabelaNova, title_layout, self.icons, tooltip="Cria uma tabela vazia", button_size=(180, 30))
-        add_button("Extrair TR para Excel", "pdf", self.extrairTrSignal, title_layout, self.icons, tooltip="Extrai as especificações do PDF", button_size=(200, 30))
+        # 2. BOTÕES DE AÇÃO
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        add_button("Tabela em Branco", "excel_down", self.abrirTabelaNova, button_layout, self.icons, tooltip="Cria uma tabela vazia", button_size=(180, 30))
+        add_button("Extrair TR", "pdf", self.extrairTrSignal, button_layout, self.icons, tooltip="Extrai as especificações do PDF", button_size=(180, 30))
+        
         self.extrairTrSignal.connect(self.abrir_dialog_config_extracao)
-        add_button("Carregar Tabela", "excel_up", self.carregarTabela, title_layout, self.icons, tooltip="Carrega a tabela preenchida para o banco", button_size=(180, 30))
         
-        title_layout.addStretch()
-        self.layout.addLayout(title_layout)
+        add_button("Carregar Tabela", "excel_up", self.carregarTabela, button_layout, self.icons, tooltip="Carrega a tabela preenchida para o banco", button_size=(180, 30))
+        add_button("Limpar Tabela", "delete", self.limparTabelaSignal, button_layout, self.icons, tooltip="Apaga todos os dados da tabela atual", button_size=(180, 30))
         
-        title1 = QLabel("Extraia as especificações automaticamente para Excel, corrija os itens em vermelho, e carregue a tabela concluída.")
-        title1.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        title1.setFont(QFont('Arial', 12))
-        self.layout.addWidget(title1)
+        button_layout.addStretch()
+        self.layout.addLayout(button_layout)
+        
+        # 3. GUIA PASSO A PASSO E BOTÃO DE DICIONÁRIO (UI Otimizada)
+        info_layout = QHBoxLayout()
+        
+        guia_label = QLabel(
+            "<b>Guia Rápido:</b><br>"
+            "1. <b>Extrair TR:</b> Gere a planilha inicial a partir do PDF.<br>"
+            "2. <b>Preencher Manualmente:</b> Abra o Excel gerado e corrija os itens a <font color='red'>vermelho</font>.<br>"
+            "3. <b>Carregar Tabela:</b> Guarde o Excel e importe-o de volta para o sistema."
+        )
+        guia_label.setTextFormat(Qt.TextFormat.RichText)
+        guia_label.setStyleSheet("background-color: #EBF5FB; color: #2C3E50; padding: 10px; border-radius: 5px; border: 1px solid #AED6F1; font-size: 13px;")
+        info_layout.addWidget(guia_label)
+        
+        info_layout.addStretch() 
+        
+        self.btn_dic = QPushButton("⚙️ Configurar dicionário de OCR")
+        self.btn_dic.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_dic.setToolTip("Abra o bloco de notas para ensinar o programa a corrigir palavras do PDF.")
+        self.btn_dic.setStyleSheet("""
+            QPushButton { 
+                color: #85929E; 
+                font-size: 11px; 
+                background: transparent; 
+                border: none; 
+                text-decoration: underline;
+                padding-top: 20px;
+            } 
+            QPushButton:hover { 
+                color: #2E86C1; 
+            }
+        """)
+        self.btn_dic.clicked.connect(self.abrir_arquivo_dicionario)
+        info_layout.addWidget(self.btn_dic, alignment=Qt.AlignmentFlag.AlignTop)
+        
+        self.layout.addLayout(info_layout)
 
-        title2 = QLabel("Importante! O índice da tabela deve ser 'item', 'catalogo', 'descricao' e 'descricao_detalhada'.")
-        title2.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        title2.setFont(QFont('Arial', 12))
-        self.layout.addWidget(title2)
-
+        # 4. TABELA
         self.table_view = QTableView(self)
         self.table_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)  
         self.table_view.verticalHeader().setVisible(False)  
@@ -156,310 +204,140 @@ class TermoReferenciaWidget(QWidget):
         self.layout.addWidget(self.table_view)
 
         self.table_view.setStyleSheet("""
-            QTableView { background-color: #F3F3F3; color: #333333; gridline-color: #CCCCCC; font-size: 14px;}
+            QTableView { background-color: #F3F3F3; color: #333333; gridline-color: #CCCCCC; font-size: 14px; margin-top: 10px;}
             QTableView::item:selected { background-color: #E0E0E0; color: #000000; }
             QTableView::item { border: 1px solid transparent; padding: 5px; }
             QHeaderView::section { background-color: #D6D6D6; color: #333333; font-weight: bold; font-size: 14px; padding: 4px; border: 1px solid #CCCCCC; }
         """)
 
+        self.dicionario_correcoes = self.carregar_dicionario()
         self.configurarSqlModelSignal.emit()
+
+    def carregar_dicionario(self):
+        dir_app = Path.home() / "Licitacao360"
+        dir_app.mkdir(exist_ok=True)
+        caminho_dic = dir_app / "dicionario_correcoes.json"
+        
+        dic_padrao = {
+            "fomo": "forno", "inax": "inox", "inar": "inox", "moxidável": "inoxidável",
+            "dietrica": "elétrica", "ples": "pães", "queintadores": "queimadores",
+            "impesz": "limpeza", "removiven": "removíveis", "gastronomicies": "gastronômicas",
+            "cacção": "cocção", "kain": "com", "nülen": "núcleo", "Masseita": "Masseira",
+            "des nado": "destinado", "desnado": "destinado",
+            "des nada": "destinada", "desnada": "destinada",
+            "quan dade": "quantidade", "quandade": "quantidade",
+            "quan dades": "quantidades", "quandades": "quantidades",
+            "iden ficação": "identificação", "idenficação": "identificação",
+            "especi ficação": "especificação", "especicação": "especificação",
+            "garan ndo": "garantindo", "garanndo": "garantindo",
+            "compa vel": "compatível", "compavel": "compatível",
+            "caracterís cas": "características", "caracteríscas": "características",
+            "plás co": "plástico", "plásco": "plástico",
+            "plás cos": "plásticos", "pláscos": "plásticos",
+            "automá ca": "automática", "automáca": "automática",
+            "automá co": "automático", "automáco": "automático",
+            "resis ncia": "resistência", "resisncia": "resistência",
+            "resis nte": "resistente", "resisnte": "resistente",
+            "resis ntes": "resistentes", "resisntes": "resistentes",
+            "sen do": "sentido", 
+            "polie leno": "polietileno", "polieleno": "polietileno",
+            "subme do": "submetido", "submedo": "submetido",
+            "reves mento": "revestimento", "revesmento": "revestimento",
+            "con nua": "contínua", "connua": "contínua",
+            "con nuo": "contínuo", "connuo": "contínuo",
+            "idên cos": "idênticos", "idêncos": "idênticos",
+            "sani rio": "sanitário", "sanirio": "sanitário",
+            "refei rio": "refeitório", "refeirio": "refeitório",
+            "of cial": "oficial", "ofcial": "oficial",
+            "fí sico": "físico", "físico": "físico",
+            "elétri ca": "elétrica", "eletrica": "elétrica",
+            "ulizados": "utilizados", "faadora": "fatiadora",
+            "faamento": "fatiamento", "faar": "fatiar",
+            "mulfuncional": "multifuncional", "Mulprocessador": "Multiprocessador",
+            "vercal": "vertical", " Equetagem": " Etiquetagem",
+            "administravos": "administrativos", "garana": "garantia",
+            "produvidade": "produtividade", "venladores": "ventiladores",
+            "anaderente": "antiaderente", "anaderentes": "antiaderentes",
+            "arculada": "articulada", "angotejamento": "antigotejamento",
+            "Domésca": "Doméstica", "ancorrosiva": "anticorrosiva",
+            "energéca": "energética", "Autodiagnósco": "Autodiagnóstico",
+            "herméco": "hermético", "disposivos": "dispositivos",
+            " ras ": " tiras ", "serpenna": "serpentina", " po ": " tipo "
+        }
+        
+        if not caminho_dic.exists():
+            try:
+                with open(caminho_dic, 'w', encoding='utf-8') as f:
+                    json.dump(dic_padrao, f, indent=4, ensure_ascii=False)
+            except Exception:
+                pass
+            return dic_padrao
+        else:
+            try:
+                with open(caminho_dic, 'r', encoding='utf-8') as f:
+                    dic_usuario = json.load(f)
+                    
+                    dic_atualizado = dic_padrao.copy()
+                    dic_atualizado.update(dic_usuario)
+                    
+                    with open(caminho_dic, 'w', encoding='utf-8') as f:
+                        json.dump(dic_atualizado, f, indent=4, ensure_ascii=False)
+                        
+                    return dic_atualizado
+            except Exception:
+                return dic_padrao
+
+    def abrir_arquivo_dicionario(self):
+        dir_app = Path.home() / "Licitacao360"
+        caminho_dic = dir_app / "dicionario_correcoes.json"
+        
+        if not caminho_dic.exists():
+            self.carregar_dicionario()
+            
+        try:
+            os.startfile(str(caminho_dic))
+        except Exception as e:
+            QMessageBox.warning(self, "Erro", f"Não foi possível abrir o arquivo automaticamente.\nEle está salvo na pasta: {dir_app}")
 
     def abrir_dialog_config_extracao(self):
         dialog = ConfigExtracaoDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             config = dialog.get_config()
+            self.dicionario_correcoes = self.carregar_dicionario()
             self.extrairPdfParaExcel(config)
 
-    # =================================================================
-    # O DETETIVE DE LIXO DE CABEÇALHO (MATA "DE MEDIDA", "TOTAL R$", ETC)
-    # =================================================================
     def _is_header_artifact(self, text):
         if not text: return True
         t = str(text).lower()
         t = t.replace("(r$)", "").replace("r$", "").replace("%", "")
-        t = re.sub(r'[^\w\s]', ' ', t) # Transforma pontuação em espaço
+        t = re.sub(r'[^\w\s]', ' ', t) 
         
-        # Lista de lixos conhecidos que vazam das colunas
         words = [
             "de", "medida", "min", "mín", "max", "máx", "total", "unitario", "unitário", 
             "unidade", "quant", "quantidade", "valor", "situacao", "situação", 
             "item", "nº", "catmat", "catser", "codigo", "código", "descricao", "descrição", 
             "especificacao", "especificação", "objeto", "nome", "minimo", "mínimo", "maximo", "máximo",
             "un", "und", "kg", "cx", "pc", "pct", "estimado", "referencia", "referência",
-            "marca", "fabricante", "modelo", "versao", "versão", "proposta", "fornecimento"
+            "marca", "fabricante", "modelo", "versao", "versão", "proposta", "fornecimento",
+            "grupa", "grupo"
         ]
-        # Pulveriza as palavras indesejadas
         for w in words:
             t = re.sub(r'\b' + w + r'\b', ' ', t)
             
-        # Se depois de apagar as palavras de cabeçalho não sobrar nada válido, é LIXO!
         return len(t.strip()) == 0
+
+    def limpar_texto_pdf(self, texto):
+        if not isinstance(texto, str):
+            return texto
+            
+        texto = re.sub(r'\(cid:\d+\)', '', texto)
+        texto = re.sub(r'cid:\d+', '', texto)
+        
+        for erro, correcao in self.dicionario_correcoes.items():
+            texto = re.sub(r'\b' + erro + r'\b', correcao, texto, flags=re.IGNORECASE)
+            
+        return texto.strip()
 
     def extrairPdfParaExcel(self, config):
         dir_seguro = os.path.expanduser("~")
-        pdf_path, _ = QFileDialog.getOpenFileName(self, "Selecione o PDF do Termo de Referência", dir_seguro, "Arquivos PDF (*.pdf)")
-        if not pdf_path: return
-
-        save_path, _ = QFileDialog.getSaveFileName(self, "Onde deseja salvar a Planilha Preenchida?", os.path.join(dir_seguro, "TR_Extraido.xlsx"), "Excel (*.xlsx)")
-        if not save_path: return
-
-        loading = QProgressDialog("Lendo o PDF e gerando o Excel...\nIsso pode levar alguns segundos.", None, 0, 0, self)
-        loading.setWindowTitle("Processando")
-        loading.setWindowModality(Qt.WindowModality.WindowModal)
-        loading.setMinimumDuration(0)
-        loading.setCancelButton(None)
-        loading.show()
-        QApplication.processEvents()
-
-        try:
-            df = self._processar_extracao(pdf_path, config)
-            
-            if df.empty:
-                QMessageBox.warning(self, "Aviso", "Não foi possível extrair os itens deste PDF com a configuração selecionada.")
-                return
-            
-            df.to_excel(save_path, index=False)
-            
-            # Pinta as células com problemas
-            wb = openpyxl.load_workbook(save_path)
-            ws = wb.active
-            fonte_vermelha = Font(color="FF0000", bold=True)
-            for row in ws.iter_rows():
-                for cell in row:
-                    if cell.value == "Preencha manualmente":
-                        cell.font = fonte_vermelha
-            wb.save(save_path)
-
-            QMessageBox.information(self, "Sucesso", f"Planilha gerada com sucesso em:\n{save_path}\n\n1. Abra o arquivo Excel.\n2. Corrija as linhas em vermelho.\n3. Salve o arquivo e clique em 'Carregar Tabela'.")
-        
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Ocorreu um erro durante a extração:\n{str(e)}")
-        finally:
-            loading.close()
-
-    def _processar_extracao(self, pdf_path, config):
-        import pdfplumber
-        linhas_brutas = []
-        termos_rodape = [
-            "manual de modelos", "consultoria-geral", "consultoria geral", 
-            "da união", "secretaria de gestão", "atualização:", "atualiz", 
-            "câmara nacional", "licitações e contratos"
-        ]
-        
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                if not tables: continue
-                for table in tables:
-                    for row in table:
-                        if not any(row): continue
-                        max_lines = 1
-                        for cell in row:
-                            if cell:
-                                linhas_celula = str(cell).split('\n')
-                                if len(linhas_celula) > max_lines: max_lines = len(linhas_celula)
-                        for i in range(max_lines):
-                            new_row = []
-                            for cell in row:
-                                if not cell: new_row.append("")
-                                else:
-                                    linhas_celula = str(cell).split('\n')
-                                    if i < len(linhas_celula): new_row.append(linhas_celula[i].strip())
-                                    else: new_row.append("")
-                            if any(new_row): linhas_brutas.append(new_row)
-
-        lista_dados = []
-
-        # =================================================================
-        # OPÇÃO 1: Extração Padrão Automática
-        # =================================================================
-        if config['opcao'] == 1:
-            dados = {}
-            current_item = None
-            orphan_cat = ""
-            orphan_desc = ""
-            orphan_spec = ""
-
-            for row in linhas_brutas:
-                row_clean = [str(c).replace('\n', ' ').strip() for c in row]
-                texto_linha = " ".join(row_clean).lower()
-                
-                if 'item' in str(row_clean[0]).lower() or ('descrição' in texto_linha and 'especificação' in texto_linha): 
-                    continue
-
-                r_item = ""
-                primeira_celula = re.sub(r'[^\d]', '', row_clean[0])
-                if primeira_celula and row_clean[0].strip() == primeira_celula: 
-                    r_item = primeira_celula
-                    current_item = str(int(r_item))
-
-                if any(termo in texto_linha for termo in termos_rodape):
-                    if current_item:
-                        if current_item not in dados: dados[current_item] = {}
-                        dados[current_item]["catalogo"] = "Preencha manualmente"
-                        dados[current_item]["descricao"] = "Preencha manualmente"
-                        dados[current_item]["descricao_detalhada"] = "Preencha manualmente"
-                    continue 
-
-                if current_item in dados and dados[current_item].get("descricao") == "Preencha manualmente":
-                    continue
-
-                r_cat = ""
-                spec_parts = []
-
-                for i, cell in enumerate(row_clean):
-                    if i == 0 and r_item: continue 
-                    if not cell: continue
-
-                    limpo_cat = re.sub(r'[^\d]', '', cell)
-                    if not r_cat and len(limpo_cat) >= 5 and len(limpo_cat) <= 7 and re.fullmatch(r'\d{5,7}', limpo_cat):
-                        if len(cell) <= 12: 
-                            r_cat = limpo_cat
-                            continue
-                    
-                    if re.fullmatch(r'\d{1,4}', cell) or re.fullmatch(r'\d{1,3}(?:\.\d{3})*(?:,\d{2})', cell): continue
-                    
-                    # FILTRA O LIXO DO CABEÇALHO PARA NÃO ENTRAR NA DESCRIÇÃO!
-                    if self._is_header_artifact(cell):
-                        continue
-                        
-                    spec_parts.append(cell)
-
-                r_desc = ""
-                r_spec = ""
-                if len(spec_parts) == 1:
-                    r_spec = spec_parts[0]
-                elif len(spec_parts) > 1:
-                    r_desc = spec_parts[0]
-                    r_spec = " ".join(spec_parts[1:])
-
-                if r_item:
-                    if current_item not in dados: dados[current_item] = {"catalogo": "", "descricao": "", "descricao_detalhada": ""}
-                    if orphan_cat: dados[current_item]["catalogo"] = orphan_cat; orphan_cat = ""
-                    if orphan_desc: dados[current_item]["descricao"] += (" " + orphan_desc); orphan_desc = ""
-                    if orphan_spec: dados[current_item]["descricao_detalhada"] += (" " + orphan_spec); orphan_spec = ""
-                    
-                    if r_cat: dados[current_item]["catalogo"] = r_cat
-                    if r_desc: dados[current_item]["descricao"] += (" " + r_desc.strip())
-                    if r_spec: dados[current_item]["descricao_detalhada"] += (" " + r_spec.strip())
-                else: 
-                    if current_item:
-                        if r_cat: dados[current_item]["catalogo"] = r_cat
-                        if r_desc: dados[current_item]["descricao"] += (" " + r_desc.strip())
-                        if r_spec: dados[current_item]["descricao_detalhada"] += (" " + r_spec.strip())
-                    else:
-                        if r_cat: orphan_cat = r_cat
-                        if r_desc: orphan_desc += (" " + r_desc)
-                        if r_spec: orphan_spec += (" " + r_spec)
-
-            for k, v in dados.items():
-                lista_dados.append({
-                    "item": k,
-                    "catalogo": v["catalogo"],
-                    "descricao": " ".join(v["descricao"].split()),
-                    "descricao_detalhada": " ".join(v["descricao_detalhada"].split())
-                })
-
-        # =================================================================
-        # OPÇÃO 2: Extração Baseada nos Cabeçalhos do Utilizador
-        # =================================================================
-        elif config['opcao'] == 2:
-            header_mapped = False
-            idx_item, idx_cat, idx_desc, idx_desc_det = -1, -1, -1, -1
-            
-            for row in linhas_brutas:
-                row_clean = [str(c).replace('\n', ' ').strip() for c in row]
-                row_lower = [c.lower() for c in row_clean]
-                
-                if not header_mapped:
-                    matches = 0
-                    for i, cell_val in enumerate(row_lower):
-                        matched_any = False
-                        if config['col_item'] in cell_val: idx_item = i; matched_any = True
-                        if config['col_cat'] in cell_val: idx_cat = i; matched_any = True
-                        if config['col_desc'] in cell_val: idx_desc = i; matched_any = True
-                        if config['col_desc_det'] in cell_val: idx_desc_det = i; matched_any = True
-                        if matched_any: matches += 1
-                        
-                if not header_mapped and idx_item != -1 and matches >= 2:
-                    header_mapped = True
-                    continue
-                
-                if header_mapped:
-                    if not any(row_clean): continue
-                    
-                    v_item = row_clean[idx_item] if idx_item != -1 and idx_item < len(row_clean) else ""
-                    v_cat = row_clean[idx_cat] if idx_cat != -1 and idx_cat < len(row_clean) else ""
-                    v_desc = row_clean[idx_desc] if idx_desc != -1 and idx_desc < len(row_clean) else ""
-                    v_desc_det = row_clean[idx_desc_det] if idx_desc_det != -1 and idx_desc_det < len(row_clean) else ""
-                    
-                    v_item_limpo = re.sub(r'[^\d]', '', v_item)
-                    texto_linha = " ".join(row_clean).lower()
-                    
-                    if any(termo in texto_linha for termo in termos_rodape):
-                        if v_item_limpo: 
-                            lista_dados.append({
-                                "item": v_item_limpo,
-                                "catalogo": "Preencha manualmente",
-                                "descricao": "Preencha manualmente",
-                                "descricao_detalhada": "Preencha manualmente"
-                            })
-                        else:
-                            if lista_dados:
-                                lista_dados[-1]["catalogo"] = "Preencha manualmente"
-                                lista_dados[-1]["descricao"] = "Preencha manualmente"
-                                lista_dados[-1]["descricao_detalhada"] = "Preencha manualmente"
-                        continue
-
-                    # FILTRA O LIXO ANTES DE ADICIONAR
-                    if self._is_header_artifact(v_desc): v_desc = ""
-                    if self._is_header_artifact(v_desc_det): v_desc_det = ""
-
-                    if v_item_limpo: 
-                        lista_dados.append({
-                            "item": v_item_limpo,
-                            "catalogo": v_cat,
-                            "descricao": v_desc,
-                            "descricao_detalhada": v_desc_det
-                        })
-                    else:
-                        if lista_dados:
-                            if lista_dados[-1]["descricao"] != "Preencha manualmente":
-                                if v_cat and not self._is_header_artifact(v_cat): lista_dados[-1]["catalogo"] += " " + v_cat
-                                if v_desc: lista_dados[-1]["descricao"] += " " + v_desc
-                                if v_desc_det: lista_dados[-1]["descricao_detalhada"] += " " + v_desc_det
-
-        df = pd.DataFrame(lista_dados)
-        if df.empty: return df
-        
-        for col in ['item', 'catalogo', 'descricao', 'descricao_detalhada']:
-            if col not in df.columns: df[col] = ""
-
-        # PREENCHE OS BURACOS GERADOS PELA LIMPEZA DO LIXO
-        for col in ['catalogo', 'descricao', 'descricao_detalhada']:
-            df[col] = df[col].apply(lambda x: 'Preencha manualmente' if pd.isna(x) or str(x).strip() == '' else x)
-
-        # AUDITOR DE PULO DE NÚMEROS
-        df['temp_item'] = pd.to_numeric(df['item'], errors='coerce')
-        if not df['temp_item'].isna().all():
-            maior_item = int(df['temp_item'].max())
-            itens_encontrados = set(df.dropna(subset=['temp_item'])['temp_item'].astype(int).tolist())
-            
-            linhas_injetadas = []
-            for i in range(1, maior_item + 1):
-                if i not in itens_encontrados:
-                    linhas_injetadas.append({
-                        'item': str(i),
-                        'catalogo': 'Preencha manualmente',
-                        'descricao': 'Preencha manualmente',
-                        'descricao_detalhada': 'Preencha manualmente'
-                    })
-            
-            if linhas_injetadas:
-                df_missing = pd.DataFrame(linhas_injetadas)
-                df = pd.concat([df, df_missing], ignore_index=True)
-                df['temp_item'] = pd.to_numeric(df['item'], errors='coerce').fillna(99999)
-                df = df.sort_values('temp_item').reset_index(drop=True)
-        
-        df = df.drop(columns=['temp_item'], errors='ignore')
-        return df[['item', 'catalogo', 'descricao', 'descricao_detalhada']]
+        pdf_path, _ = QFileDialog.getOpenFileName

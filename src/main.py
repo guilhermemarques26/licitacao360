@@ -410,26 +410,28 @@ class MainWindow(QMainWindow):
         event.accept() if reply == QMessageBox.StandardButton.Yes else event.ignore()
                     
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
+    import sys
+    import ctypes
+    from PyQt6.QtGui import QIcon
+    # Importa a pasta de ícones com o caminho absoluto e seguro!
+    from paths import ICONS_DIR 
 
-    # 1. TENTA ENGANAR O CACHE DO WINDOWS
+    # 1. ENGANAR O CACHE DO WINDOWS COM UM NOVO ID
     try:
-        myappid = 'licitacao360.versao_3_4_1_fix_definitivo' 
+        myappid = 'licitacao360.oficial.v3_4_1' 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except Exception as e:
-        print(f"Não foi possível forçar o ícone: {e}")
+        print(f"Aviso do ícone: {e}")
 
-    # 2. RESOLUÇÃO ABSOLUTA DO CAMINHO DO ÍCONE
-    # Independentemente de onde o terminal rodar, nós procuramos a pasta 'assets/icons/icon3.ico' baseada no diretório atual
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    caminho_icone = os.path.join(current_dir, "assets", "icons", "icon3.ico")
+    app = QApplication(sys.argv)
+
+    # 2. DEFINIR O ÍCONE GLOBAL USANDO O PATHS.PY
+    caminho_icone = ICONS_DIR / "icon3.ico"
     
-    if os.path.exists(caminho_icone):
-        icone_global = QIcon(caminho_icone)
-        # Força o ícone na aplicação global do Windows
-        app.setWindowIcon(icone_global)
+    if caminho_icone.exists():
+        app.setWindowIcon(QIcon(str(caminho_icone)))
     else:
-        print(f"ATENÇÃO CRÍTICA: O arquivo 'icon3.ico' não existe em:\n{caminho_icone}")
+        print(f"FALHA: O ícone não foi encontrado em {caminho_icone}")
 
     window = MainWindow()
     window.show()

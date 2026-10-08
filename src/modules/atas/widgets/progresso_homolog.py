@@ -103,15 +103,11 @@ class ProcessamentoWidget(QWidget):
 
     def setup_button_layout(self, main_layout):
         button_layout = QHBoxLayout()
-        
-        # Adicionado o botão que emite o sinal para gerar a planilha base
         add_button_func("Gerar Planilha Base", "excel_down", self.gerarPlanilhaBaseClicked.emit, button_layout, self.icon_cache, "Cruza TR e Homologação para gerar planilha base", button_size=(250, 40))
         add_button_func_vermelho("Iniciar Processamento", self.start_processing, button_layout, "Clique para iniciar", button_size=(300, 40))
-        
         main_layout.addLayout(button_layout)
 
     def set_buttons_enabled(self, enabled: bool):
-        # Permite ao controller congelar os botões durante o processamento do Worker
         for btn in self.findChildren(QPushButton):
             btn.setEnabled(enabled)
 
@@ -165,12 +161,12 @@ class ProcessamentoWidget(QWidget):
         self.worker_thread.progress_signal.connect(self.progress_bar.setValue)
 
         self.worker_thread.start()
-        self.set_buttons_enabled(False) # Bloqueia botões
+        self.set_buttons_enabled(False)
 
     def finalizar_processamento_homologacao(self, extracted_data):
         self.update_context("Processamento concluído.")
         self.timer.stop() 
-        self.set_buttons_enabled(True) # Libera botões
+        self.set_buttons_enabled(True)
         elapsed_time = int(time.time() - self.start_time)
         self.time_label.setText(f"Tempo total: {elapsed_time}s")
         self.homologacao_dataframe = save_to_dataframe(extracted_data)
@@ -189,7 +185,7 @@ class ProcessamentoWidget(QWidget):
 
         if len(unique_combinations) > 1:
             combinations = unique_combinations.apply(lambda row: f"{row['uasg']}-{row['num_pregao']}-{row['ano_pregao']}", axis=1)
-            QMessageBox.warning(None, "Cominações Múltiplas Encontradas",
+            QMessageBox.warning(None, "Combinações Múltiplas Encontradas",
                                 f"As seguintes combinações únicas foram encontradas:\n" + "\n".join(combinations))
             return
 
@@ -293,334 +289,21 @@ class ProcessamentoWidget(QWidget):
             self.update_context("Diretório PDF não encontrado.")
             return False
         return True
-    
-    def setup_treeview_styles(self):
-        header = self.treeView.header()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-
-    def abrir_registro_sicaf(self):
-        if self.homologacao_dataframe is None:
-            QMessageBox.warning(self, "Erro", "Dados não disponíveis.")
-            return
-
-        dialog = RegistroSICAFDialog (
-            homologacao_dataframe=self.homologacao_dataframe,
-            pdf_dir=self.pdf_dir,
-            model=self.model,
-            icons=self.icon_cache,
-            database_ata_manager=self.database_ata_manager,
-            update_context_callback=self.update_context,
-            parent=self
-        )
-        dialog.exec()
-
-class RegistroSICAFDialog(QDialog):
-    def __init__(self, homologacao_dataframe, pdf_dir, model, icons, database_ata_manager, parent=None, update_context_callback=None):
-        super().__init__(parent)
-        self.homologacao_dataframe = homologacao_dataframe
-        self.sicaf_dir = pdf_dir / 'pasta_sicaf'
-        self.model = model
-        self.icon_cache = icons
-        self.database_ata_manager = database_ata_manager  
-        self.update_context = update_context_callback  
-        self.setWindowTitle("Registro SICAF")
-        self.setFixedSize(1000, 600)
-        self.setup_ui()
-
-    def setup_ui(self):
-        main_layout = QHBoxLayout(self)
-        left_layout = self.criar_layout_esquerdo()
-        main_layout.addLayout(left_layout)
-        right_widget = self.criar_layout_direito()
-        main_layout.addWidget(right_widget)
-        self.setLayout(main_layout)
-        self.atualizar_lista()
-
-    def criar_layout_esquerdo(self):
-        left_layout = QVBoxLayout()
-        legenda_layout = self.criar_legenda_layout()
-        left_layout.addLayout(legenda_layout)
-
-        self.left_list_widget = QListWidget()
-        self.left_list_widget.setStyleSheet("QListWidget::item { text-align: left; }")
-        left_layout.addWidget(self.left_list_widget)
-
-        processing_button = self.create_button(
-            text="Processamento de SICAF",
-            icon=self.icon_cache["processing"],
-            callback=self.iniciar_processamento_sicaf,  
-            tooltip_text="Iniciar processamento do SICAF"
-        )
-        left_layout.addWidget(processing_button, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        return left_layout
-
-    def iniciar_processamento_sicaf(self):
-        if not self.sicaf_dir.exists():
-            QMessageBox.warning(self, "Erro", "A pasta SICAF não existe.")
-            return
-        
-        if self.update_context:  
-            self.update_context("Iniciando o processamento dos arquivos SICAF...")
-        
-        self.worker = WorkerSICAF(self.sicaf_dir)
-        self.worker.processing_complete.connect(self.on_processing_complete)
-        self.worker.update_context_signal.connect(self.update_context)  
-
-        self.worker.start()
-
-    def on_processing_complete(self, dataframes):
-        for df in dataframes:
-            for _, row in df.iterrows():
-                empresa = row.get('empresa')
-                cnpj = row.get('cnpj')
-                nome_fantasia = row.get('nome_fantasia')
-                endereco = row.get('endereco')
-                cep = row.get('cep')
-                municipio = row.get('municipio')
-                telefone = row.get('telefone')
-                email = row.get('email')
-                responsavel_legal = row.get('nome')  
-
-                check_query = "SELECT 1 FROM registro_sicaf WHERE cnpj = ?"
-                exists = self.database_ata_manager.execute_query(check_query, (cnpj,))
-
-                if exists:
-                    update_query = """
-                    UPDATE registro_sicaf SET 
-                        empresa = ?, nome_fantasia = ?, endereco = ?, cep = ?, 
-                        municipio = ?, telefone = ?, email = ?, responsavel_legal = ?
-                    WHERE cnpj = ?
-                    """
-                    params = (empresa, nome_fantasia, endereco, cep, municipio, telefone, email, responsavel_legal, cnpj)
-                    try:
-                        self.database_ata_manager.execute_update(update_query, params)
-                        print(f"Registro de {empresa} atualizado com sucesso.")
-                    except Exception as e:
-                        logging.error(f"Erro ao atualizar o registro de {empresa}: {e}")
-                else:
-                    insert_query = """
-                    INSERT INTO registro_sicaf (empresa, cnpj, nome_fantasia, endereco, cep, municipio, telefone, email, responsavel_legal)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """
-                    params = (empresa, cnpj, nome_fantasia, endereco, cep, municipio, telefone, email, responsavel_legal)
-                    try:
-                        self.database_ata_manager.execute_query(insert_query, params)
-                        print(f"Registro de {empresa} inserido com sucesso.")
-                    except Exception as e:
-                        logging.error(f"Erro ao inserir o registro de {empresa}: {e}")
-        
-        QMessageBox.information(self, "Processamento Completo", "Todos os registros foram processados e salvos no banco de dados com sucesso.")
-        print("Processamento SICAF concluído.")
-
-    def create_button(self, text, icon, callback, tooltip_text, icon_size=QSize(30, 30), button_size=QSize(120, 30)):
-        btn = QPushButton(text)
-        if icon:
-            btn.setIcon(icon)
-            btn.setIconSize(icon_size)
-        btn.clicked.connect(callback)
-        btn.setToolTip(tooltip_text)
-        btn.setFixedSize(button_size.width(), button_size.height())
-        btn.setStyleSheet("QPushButton { font-size: 12pt; padding: 5px; }")
-        return btn
-
-    def criar_legenda_layout(self):
-        legenda_layout = QHBoxLayout()
-        legenda_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        legenda_text = QLabel("Legenda: ")
-        
-        confirm_icon = QLabel()
-        confirm_icon.setPixmap(self.icon_cache["check"].pixmap(24, 24))
-        confirm_text = QLabel("SICAF encontrado")
-
-        cancel_icon = QLabel()
-        cancel_icon.setPixmap(self.icon_cache["cancel"].pixmap(24, 24))
-        cancel_text = QLabel("SICAF não encontrado")
-
-        legenda_layout.addWidget(legenda_text)
-        legenda_layout.addWidget(confirm_icon)
-        legenda_layout.addWidget(confirm_text)
-        legenda_layout.addWidget(cancel_icon)
-        legenda_layout.addWidget(cancel_text)
-
-        return legenda_layout
-
-    def criar_layout_direito(self):
-        right_widget = QWidget()
-        right_widget.setFixedWidth(350)
-        right_layout = QVBoxLayout(right_widget)
-        top_right_layout = self.criar_botoes_direitos()
-        right_layout.addLayout(top_right_layout)
-
-        self.right_label = QLabel(self.obter_texto_arquivos_pdf())
-        right_layout.addWidget(self.right_label)
-
-        self.pdf_list_widget = QListWidget()
-        self.load_pdf_files()
-        right_layout.addWidget(self.pdf_list_widget)
-
-        return right_widget
-
-    def load_pdf_files(self):
-        if self.sicaf_dir.exists() and self.sicaf_dir.is_dir():
-            pdf_files = list(self.sicaf_dir.glob("*.pdf"))
-            for pdf_file in pdf_files:
-                self.pdf_list_widget.addItem(pdf_file.name)
-        else:
-            self.pdf_list_widget.addItem("Nenhum arquivo PDF encontrado.")
-
-    def criar_botoes_direitos(self):
-        top_right_layout = QHBoxLayout()
-        abrir_pasta_button = QPushButton("Abrir Pasta")
-        abrir_pasta_button.clicked.connect(self.abrir_pasta_sicaf)
-
-        atualizar_button = QPushButton("Atualizar")
-        atualizar_button.clicked.connect(self.atualizar_lista)
-
-        top_right_layout.addWidget(abrir_pasta_button)
-        top_right_layout.addWidget(atualizar_button)
-        return top_right_layout
-
-    def obter_texto_arquivos_pdf(self):
-        quantidade = self.count_pdf_files()
-        if quantidade == 0:
-            return "Nenhum arquivo PDF encontrado na pasta."
-        elif quantidade == 1:
-            return "1 arquivo PDF encontrado na pasta."
-        else:
-            return f"{quantidade} arquivos PDF encontrados na pasta."
-        
-    def count_pdf_files(self):
-        if self.sicaf_dir.exists() and self.sicaf_dir.is_dir():
-            return len(list(self.sicaf_dir.glob("*.pdf")))
-        return 0
-            
-    def atualizar_lista(self):
-        create_table_query = """
-        CREATE TABLE IF NOT EXISTS registro_sicaf (
-            empresa TEXT,
-            cnpj TEXT PRIMARY KEY,
-            nome_fantasia,
-            endereco TEXT,
-            cep TEXT,
-            municipio TEXT,
-            telefone TEXT,
-            email TEXT,
-            responsavel_legal TEXT
-        )
-        """
-        try:
-            self.database_ata_manager.execute_query(create_table_query)
-        except Exception as e:
-            QMessageBox.critical(self, "Erro no Banco de Dados", f"Erro ao criar a tabela registro_sicaf: {e}")
-            return
-
-        self.left_list_widget.clear()
-        unique_combinations = self.homologacao_dataframe[['empresa', 'cnpj']].drop_duplicates()
-
-        for _, row in unique_combinations.iterrows():
-            empresa = row['empresa']
-            cnpj = row['cnpj']
-            
-            if pd.isnull(empresa) or pd.isnull(cnpj):
-                continue
-
-            check_cnpj_query = "SELECT 1 FROM registro_sicaf WHERE cnpj = ?"
-            exists = self.database_ata_manager.execute_query(check_cnpj_query, (cnpj,))
-
-            if not exists:
-                insert_query = "INSERT INTO registro_sicaf (empresa, cnpj) VALUES (?, ?)"
-                try:
-                    self.database_ata_manager.execute_query(insert_query, (empresa, cnpj))
-                except Exception as e:
-                    logging.error(f"Erro ao inserir empresa e CNPJ no banco de dados: {e}")
-
-            item_widget = QWidget()
-            item_layout = QHBoxLayout(item_widget)
-            item_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-
-            icon_label = QLabel()
-            icon_label.setPixmap(self.get_icon_for_cnpj(cnpj).pixmap(24, 24))
-
-            empresa_label = QLabel(f"{cnpj} - {empresa}")
-            copiar_button = QPushButton("Copiar CNPJ")
-            copiar_button.clicked.connect(lambda _, cnpj=cnpj: self.copiar_para_area_de_transferencia(cnpj))
-
-            item_layout.addWidget(icon_label)
-            item_layout.addWidget(copiar_button)
-            item_layout.addWidget(empresa_label)
-            
-            list_item = QListWidgetItem(self.left_list_widget)
-            list_item.setSizeHint(item_widget.sizeHint())
-            self.left_list_widget.addItem(list_item)
-            self.left_list_widget.setItemWidget(list_item, item_widget)
-
-        self.pdf_list_widget.clear()
-        pdf_files = list(self.sicaf_dir.glob("*.pdf"))
-
-        if pdf_files:
-            for pdf_file in pdf_files:
-                self.pdf_list_widget.addItem(pdf_file.name)
-        else:
-            self.pdf_list_widget.addItem("Nenhum arquivo PDF encontrado.")
-
-        quantidade = len(pdf_files)
-        if quantidade == 0:
-            right_label_text = "Nenhum arquivo PDF encontrado na pasta."
-        elif quantidade == 1:
-            right_label_text = "1 arquivo PDF encontrado na pasta."
-        else:
-            right_label_text = f"{quantidade} arquivos PDF encontrados na pasta."
-
-        self.right_label.setText(right_label_text)
-
-    def abrir_pasta_sicaf(self):
-        if not self.sicaf_dir.exists():
-            self.sicaf_dir.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.sicaf_dir)))
-
-    def get_icon_for_cnpj(self, cnpj):
-        try:
-            query = "SELECT 1 FROM registro_sicaf WHERE cnpj = ?"
-            result = self.database_ata_manager.execute_query(query, (cnpj,))
-            return self.icon_cache["check"] if result else self.icon_cache["cancel"]
-        except Exception as e:
-            return self.icon_cache["cancel"]
-
-    def load_icons(self):
-        icon_cache = {}
-        icon_paths = {
-            "check": self.icons_dir / "check.png",
-            "cancel": self.icons_dir / "cancel.png"
-        }
-        for key, path in icon_paths.items():
-            icon = QIcon(str(path)) if path.exists() else QIcon()
-            icon_cache[key] = icon
-        return icon_cache
-
-    def copiar_para_area_de_transferencia(self, cnpj):
-        clipboard = QApplication.clipboard()
-        clipboard.setText(cnpj)
-        
-        msg_box = QMessageBox(self)
-        msg_box.setIcon(QMessageBox.Icon.Information)
-        msg_box.setWindowTitle("CNPJ Copiado")
-        msg_box.setText(f"O CNPJ {cnpj} foi copiado para a área de transferência.")
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
-        
-        QTimer.singleShot(2000, msg_box.close)
-        msg_box.exec()
 
 
+# =================================================================
+# EXPRESSÕES REGULARES BLINDADAS (LOOKAHEAD PARA UNIDADE)
+# =================================================================
 padrao_1 = (r"UASG\s+(?P<uasg>\d+)\s+-\s+(?P<orgao_responsavel>.+?)\s+PREGÃO\s+(?P<num_pregao>\d+)/(?P<ano_pregao>\d+)")
 padrao_srp = r"(?P<srp>SRP - Registro de Preço|SISPP - Tradicional)"
 padrao_objeto = (r"Objeto da compra:\s*(?P<objeto>.*?)\s*Entrega de propostas:")
+
 padrao_grupo2 = (
     r"Item\s+(?P<item>\d+)(?:\s+do\s+Grupo\s+G(?P<grupo>\d+))?.*?"
     r"Valor\s+estimado:\s+R\$\s+(?P<valor>[\d,\.]+).*?"
     r"(?:Critério\s+de\s+julgamento:\s+(?P<crit_julgamento>.*?))?\s*"
     r"Quantidade:\s+(?P<quantidade>\d+)\s+"
-    r"Unidade\s+de\s+fornecimento:\s+(?P<unidade>.*?)\s+"
+    r"(?:Unidade\s+de\s+fornecimento|UF):\s+(?P<unidade>.*?)(?=\s*R\$|\s*Situação:)\s*.*?"
     r"Situação:\s+(?P<situacao>Adjudicado e Homologado|Deserto e Homologado|Fracassado e Homologado|Anulado e Homologado|Revogado e Homologado)"
 )
 
@@ -631,7 +314,7 @@ padrao_item_quantidade = (
 
 padrao_valor_estimado_unidade_fornecimento = (
     r"Valor\s+estimado:\s+R\$\s+(?P<valor>[\d,.]+)(?:\s+\(unitário\))?\s+"
-    r"Unidade\s+de\s+fornecimento:\s+(?P<unidade>.*?)(?:\s+R\$|$|\s+)"
+    r"(?:Unidade\s+de\s+fornecimento|UF):\s+(?P<unidade>.*?)(?=\s*R\$|\s*Situação:)\s*.*?"
 )
 
 padrao_situacao = (
@@ -664,14 +347,20 @@ padrao_bloco_valores = (
 
 padrao_3 = padrao_cpf_od + padrao_empresa + padrao_bloco_valores
 
+
 def processar_item(match, conteudo: str, ultima_posicao_processada: int, padrao_3: str, padrao_4: str) -> dict:
     item = match.groupdict()
+    
+    # CORTE BRUTO COM DOTALL: Destrói qualquer 'R$' e o que estiver abaixo!
+    unidade_bruta = str(item.get('unidade', 'N/A'))
+    unidade_limpa = re.sub(r'\s*R\$.*', '', unidade_bruta, flags=re.DOTALL | re.IGNORECASE).strip()
+
     item_data = {
         "item": int(item['item']) if 'item' in item and item['item'].isdigit() else 'N/A',
         "grupo": item.get('grupo', 'N/A'),
         "valor_estimado": item.get('valor', 'N/A'),
         "quantidade": item.get('quantidade', 'N/A'),
-        "unidade": item.get('unidade', 'N/A'),
+        "unidade": unidade_limpa,
         "situacao": item.get('situacao', 'N/A')
     }
 
@@ -832,4 +521,10 @@ def extrair_uasg_e_pregao(conteudo: str, padrao_1: str, padrao_srp: str, padrao_
 def save_to_dataframe(extracted_data): 
     df_extracted = create_dataframe_from_pdf_files(extracted_data)
     df_extracted['item'] = pd.to_numeric(df_extracted['item'], errors='coerce').astype('Int64')
+    
+    # BLINDAGEM NO RETORNO: Limpa a coluna unidade antes de salvar no banco
+    if 'unidade' in df_extracted.columns:
+        df_extracted['unidade'] = df_extracted['unidade'].astype(str).apply(
+            lambda x: re.sub(r'\s*R\$.*', '', x, flags=re.DOTALL | re.IGNORECASE).strip()
+        )
     return df_extracted

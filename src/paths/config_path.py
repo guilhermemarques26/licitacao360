@@ -40,7 +40,13 @@ PRE_DEFINICOES_JSON = JSON_DIR / "pre_definicioes.json"
 AGENTES_RESPONSAVEIS_FILE = JSON_DIR / "agentes_responsaveis.json"
 ORGANIZACOES_FILE = JSON_DIR / "organizacoes.json"
 
-PDF_DIR = Path(load_config("PDF_DIR", DATABASE_DIR / "pdf"))
+# --- GARANTIA DE CRIAÇÃO DOS JSONs NO EXECUTÁVEL ---
+for json_file in [PRE_DEFINICOES_JSON, AGENTES_RESPONSAVEIS_FILE, ORGANIZACOES_FILE, CONFIG_FILE]:
+    if not json_file.exists():
+        with open(json_file, 'w', encoding='utf-8') as f:
+            json.dump({}, f)
+
+PDF_DIR = Path(load_config("PDF_DIR", str(DATABASE_DIR / "pdf")))
 
 class ConfigManager(QObject):
     config_updated = pyqtSignal(str, Path)  # sinal emitido quando uma configuração é atualizada

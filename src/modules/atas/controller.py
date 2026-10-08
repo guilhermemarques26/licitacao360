@@ -23,6 +23,7 @@ class GerarAtasController(QObject):
 
         self.view.tr_widget.carregarTabela.connect(self.caregar_tabela_com_dados)
         self.model.tabelaCarregada.connect(self.configurar_sql_model)
+        self.view.tr_widget.limparTabelaSignal.connect(self.limpar_tabela)
 
         if hasattr(self.view.homolog_widget, 'gerarPlanilhaBaseClicked'):
              self.view.homolog_widget.gerarPlanilhaBaseClicked.connect(self.iniciar_geracao_planilha_base)
@@ -118,3 +119,20 @@ class GerarAtasController(QObject):
 
     def gerar_atas(self):
         self.view.content_area.setCurrentWidget(self.view.atas_widget)
+
+    def limpar_tabela(self):
+        resposta = QMessageBox.question(
+            self.view.tr_widget, 
+            "Confirmar Limpeza", 
+            "Tem certeza de que deseja apagar todos os itens da tabela atual?\nIsso não pode ser desfeito.", 
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if resposta == QMessageBox.StandardButton.Yes:
+            num_rows = self.model.rowCount()
+            for i in range(num_rows - 1, -1, -1):
+                self.model.removeRow(i)
+                
+            if self.model.submitAll():
+                self.model.select()  # Recarrega a tabela visualmente vazia
+            else:
+                QMessageBox.warning(self.view.tr_widget, "Erro", f"Erro ao limpar banco de dados: {self.model.lastError().text()}")

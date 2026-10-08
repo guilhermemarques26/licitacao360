@@ -22,7 +22,6 @@ class Worker(QThread):
 
     def run(self):
         try:
-            # CORREÇÃO: O nome correto da função que cria a tabela base
             if self.modo == 'tabela_base':
                 self._processar_para_tabela_base()
             
@@ -103,13 +102,13 @@ class Worker(QThread):
                 with pdfplumber.open(path_arquivo) as pdf:
                     texto_completo = "".join([page.extract_text() for page in pdf.pages if page.extract_text()])
                     
-                    num_item = regex_item.search(texto_completo)
-                    desc_item = regex_desc.search(texto_completo)
+                    itens_matches = list(regex_item.finditer(texto_completo))
+                    desc_matches = list(regex_desc.finditer(texto_completo))
 
-                    if num_item and desc_item:
+                    for n_match, d_match in zip(itens_matches, desc_matches):
                         dados_homologacao.append({
-                            'item': num_item.group(1).strip(),
-                            'descricao': desc_item.group(1).strip()
+                            'item': n_match.group(1).strip(),
+                            'descricao': d_match.group(1).strip()
                         })
             except Exception as e:
                 self.update_context_signal.emit(f"AVISO: Não foi possível ler {arquivo}: {e}")
@@ -171,6 +170,7 @@ class Worker(QThread):
         except Exception as e:
             self.update_context_signal.emit(f"Erro ao processar {pdf_file.name}: {e}")
             return None
+
 
 class CustomTreeView(QTreeView):
     def __init__(self, parent=None):
@@ -276,16 +276,25 @@ class CustomProgressBar(QProgressBar):
         painter.drawText(int((rect.width() - text_width) / 2), int((rect.height() + text_height) / 2), text)
         painter.end()
 
-class TreeViewWindow(QDialog): 
 
+class TreeViewWindow(QDialog): 
     def __init__(self, dataframe, icons_dir, database_ata_manager, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Resultados do Processamento (Em construção)")
-        self.dataframe = dataframe
+        self.setWindowTitle("Resultados do Processamento")
         self.icons_dir = icons_dir
         self.database_ata_manager = database_ata_manager  
         self.setMinimumSize(800, 600)
 
+        # =================================================================
+        # BLINDAGEM VISUAL: Corta o "R$" ignorando as quebras de linha (re.DOTALL)
+        # Isso limpa a tabela caso a base de dados ainda tenha resquícios antigos
+        # =================================================================
+        if 'unidade' in dataframe.columns:
+            dataframe['unidade'] = dataframe['unidade'].astype(str).apply(
+                lambda x: re.sub(r'\s*R\$.*', '', x, flags=re.DOTALL | re.IGNORECASE).strip()
+            )
+            
+        self.dataframe = dataframe
         self.setup_ui()
 
     def setup_ui(self):
@@ -424,7 +433,7 @@ class ModeloTreeview:
 
         detalhes = [
             f"Descrição Detalhada: {row['descricao_detalhada']}",
-            f"Unidade de Fornecimento: {row['unidade']} Quantidade: {self.formatar_quantidade(row['quantidade'])} "
+            f"Unidade de Fornecimento: {row.get('unidade', 'Não informado')} Quantidade: {self.formatar_quantidade(row['quantidade'])} "
             f"Valor Estimado: {self.formatar_brl(row['valor_estimado'])} Valor Homologado: {self.formatar_brl(row['valor_homologado_item_unitario'])} "
             f"Desconto: {self.formatar_percentual(row['percentual_desconto'])} Marca: {row['marca_fabricante']} Modelo: {row['modelo_versao']}",
         ]
@@ -439,7 +448,7 @@ class ModeloTreeview:
 
     def formatar_brl(self, valor):
         try:
-            if valor is None:
+            if valor is None or pd.isna(valor):
                 return "Não disponível"  
             return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         except ValueError:
@@ -447,6 +456,7 @@ class ModeloTreeview:
 
     def formatar_quantidade(self, valor):
         try:
+            if pd.isna(valor): return "0"
             float_value = float(valor)
             if float_value.is_integer():
                 return f"{int(float_value)}"
@@ -457,13 +467,11 @@ class ModeloTreeview:
 
     def formatar_percentual(self, valor):
         try:
+            if pd.isna(valor): return "0,00%"
             percent_value = float(valor)
             return f"{percent_value:.2f}%"
         except ValueError:
             return "Erro de Formatação"
-
-import re
-import pandas as pd
 
 class WorkerSICAF(QThread):
     processing_complete = pyqtSignal(list)  
@@ -515,6 +523,7 @@ class WorkerSICAF(QThread):
             self.update_context_signal.emit(f"Erro ao processar {pdf_file.name}: {e}")
             return None
 
+
 def extrair_dados_sicaf(texto: str) -> pd.DataFrame:
     dados_sicaf = (
         r"CNPJ:\s*(?P<cnpj>[\d./-]+)\s*"
@@ -523,16 +532,14 @@ def extrair_dados_sicaf(texto: str) -> pd.DataFrame:
         r"Nome Fantasia:\s*(?P<nome_fantasia>.*?)\s*"
         r"Situação do Fornecedor:\s*(?P<situacao_cadastro>.*?)\s*"
         r"Data de Vencimento do Cadastro:\s*(?P<data_vencimento>\d{2}/\d{2}/\d{4})\s*"
-        r"Dados do Nível.*?Dados para Contato\s*"
-        r"CEP:\s*(?P<cep>[\d.-]+)\s*"
+        r".*?CEP:\s*(?P<cep>[\d.-]+)\s*"
         r"Endereço:\s*(?P<endereco>.*?)\s*"
-        r"Município\s*/\s*UF:\s*(?P<municipio>.*?)\s*/\s*(?P<uf>.*?)\s*"
-        r"Telefone:\s*(?P<telefone>.*?)\s*"
-        r"E-mail:\s*(?P<email>.*?)\s*"
-        r"Dados do Responsável Legal"
+        r"Município\s*/\s*UF:\s*(?P<municipio>[^/]+?)\s*/\s*(?P<uf>.*?)(?=\s*(?:Telefone:|E-mail:|Dados do Responsável|$|\n|\r))\s*"
+        r"(?:Telefone:\s*(?P<telefone>[^\n\r]+?)(?=\s*(?:E-mail:|Dados do Responsável|$|\n|\r))\s*)?"
+        r"(?:E-mail:\s*(?P<email>[^\n\r]+?)(?=\s*(?:Dados do Responsável|$|\n|\r))\s*)?"
     )
 
-    match = re.search(dados_sicaf, texto, re.S)
+    match = re.search(dados_sicaf, texto, re.S | re.IGNORECASE)
     if not match:
         return pd.DataFrame()  
 
@@ -551,3 +558,235 @@ def extrair_dados_responsavel(texto: str) -> pd.DataFrame:
 
     data = {key: [value.strip()] if value else [None] for key, value in match.groupdict().items()}
     return pd.DataFrame(data)
+
+padrao_1 = (r"UASG\s+(?P<uasg>\d+)\s+-\s+(?P<orgao_responsavel>.+?)\s+PREGÃO\s+(?P<num_pregao>\d+)/(?P<ano_pregao>\d+)")
+padrao_srp = r"(?P<srp>SRP - Registro de Preço|SISPP - Tradicional)"
+padrao_objeto = (r"Objeto da compra:\s*(?P<objeto>.*?)\s*Entrega de propostas:")
+
+padrao_grupo2 = (
+    r"Item\s+(?P<item>\d+)(?:\s+do\s+Grupo\s+G(?P<grupo>\d+))?.*?"
+    r"Valor\s+estimado:\s+R\$\s+(?P<valor>[\d,\.]+).*?"
+    r"(?:Critério\s+de\s+julgamento:\s+(?P<crit_julgamento>.*?))?\s*"
+    r"Quantidade:\s+(?P<quantidade>\d+)\s+"
+    r"(?:Unidade\s+de\s+fornecimento|UF):\s+(?P<unidade>.*?)(?=\s*R\$|\s*Situação:)\s*.*?"
+    r"Situação:\s+(?P<situacao>Adjudicado e Homologado|Deserto e Homologado|Fracassado e Homologado|Anulado e Homologado|Revogado e Homologado)"
+)
+
+padrao_item_quantidade = (
+    r"Item\s+(?P<item>\d+)\s+-\s+.*?"
+    r"Quantidade:\s+(?P<quantidade>\d+)\s+"
+)
+
+padrao_valor_estimado_unidade_fornecimento = (
+    r"Valor\s+estimado:\s+R\$\s+(?P<valor>[\d,.]+)(?:\s+\(unitário\))?\s+"
+    r"(?:Unidade\s+de\s+fornecimento|UF):\s+(?P<unidade>.*?)(?=\s*R\$|\s*Situação:)\s*.*?"
+)
+
+padrao_situacao = (
+    r"Situação:\s+(?P<situacao>"
+    r"Adjudicado e Homologado|Deserto e Homologado|Fracassado e Homologado|Anulado e Homologado|Revogado e Homologado)"
+)
+
+padrao_item2 = padrao_item_quantidade + padrao_valor_estimado_unidade_fornecimento + padrao_situacao
+
+padrao_4 = (
+    r"Proposta\s+adjudicada.*?"
+    r"Marca/Fabricante\s*:\s*(?P<marca_fabricante>.*?)\s*"
+    r"Modelo/versão\s*:\s*(?P<modelo_versao>.*?)(?=\s*\d{2}/\d{2}/\d{4}|\s*Valor\s+proposta\s*:)"
+)
+
+padrao_cpf_od = (
+    r"(?:Adjucado|Adjudicado)\s+e\s+Homologado\s+por\s+CPF\s+"
+    r"(?P<cpf_od>\*\*\*.\d{3}.\*\*\*-\*\d{1})\s+-\s+"
+    r"(?P<ordenador_despesa>[^\d,]+?)\s+para\s+"
+)
+
+padrao_empresa = (
+    r"(?P<empresa>.*?)(?=\s*,\s*CNPJ\s+)"
+    r"\s*,\s*CNPJ\s+(?P<cnpj>\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}),\s+"
+)
+
+padrao_bloco_valores = (
+    r"(?P<bloco_valores>.*?)(?=\s*Propostas\s+do\s+Item)"
+)
+
+padrao_3 = padrao_cpf_od + padrao_empresa + padrao_bloco_valores
+
+
+def processar_item(match, conteudo: str, ultima_posicao_processada: int, padrao_3: str, padrao_4: str) -> dict:
+    item = match.groupdict()
+    
+    # =================================================================
+    # CORREÇÃO DEFINITIVA DA UNIDADE: 
+    # Adicionado re.DOTALL para forçar a limpeza ignorando quebras de linha!
+    # =================================================================
+    unidade_bruta = str(item.get('unidade', 'N/A'))
+    unidade_limpa = re.sub(r'\s*R\$.*', '', unidade_bruta, flags=re.DOTALL | re.IGNORECASE).strip()
+
+    item_data = {
+        "item": int(item['item']) if 'item' in item and item['item'].isdigit() else 'N/A',
+        "grupo": item.get('grupo', 'N/A'),
+        "valor_estimado": item.get('valor', 'N/A'),
+        "quantidade": item.get('quantidade', 'N/A'),
+        "unidade": unidade_limpa,
+        "situacao": item.get('situacao', 'N/A')
+    }
+
+    if item_data['situacao'] == 'Adjudicado e Homologado':
+        match_3 = re.search(padrao_3, conteudo, re.DOTALL | re.IGNORECASE)
+        
+        if match_3:
+            item_data["ordenador_despesa"] = match_3.group('ordenador_despesa').strip()
+            item_data["empresa"] = match_3.group('empresa').replace('\n', ' ').strip()
+            item_data["cnpj"] = match_3.group('cnpj').strip()
+
+            bloco_valores = match_3.group('bloco_valores')
+            
+            match_lance = re.search(r"melhor\s+lance\s*:\s*R\$\s*([\d,.]+)", bloco_valores)
+            item_data["melhor_lance"] = match_lance.group(1) if match_lance else 'N/A'
+
+            match_negociado = re.search(r"valor\s+negociado\s*:\s*R\$\s*([\d,.]+)", bloco_valores)
+            item_data["valor_negociado"] = match_negociado.group(1) if match_negociado else 'N/A'
+            
+            posicao_final_match_3 = match_3.end()
+            match_4 = re.search(padrao_4, conteudo[posicao_final_match_3:], re.DOTALL | re.IGNORECASE)
+            if match_4:
+                item_data["marca_fabricante"] = match_4.group('marca_fabricante').strip() or 'N/A'
+                item_data["modelo_versao"] = match_4.group('modelo_versao').strip() or 'N/A'
+
+    return item_data, ultima_posicao_processada 
+
+def create_dataframe_from_pdf_files(extracted_data):
+    if not isinstance(extracted_data, list):
+        raise TypeError("extracted_data deve ser uma lista de dicionários.")
+
+    all_data = []
+    print("\nIniciando processamento de extracted_data...\n")
+
+    for idx, item in enumerate(extracted_data):
+        if isinstance(item, dict) and 'text' in item and isinstance(item['text'], str):
+            content = item['text']
+            
+            uasg_pregao_data = extrair_uasg_e_pregao(content, padrao_1, padrao_srp, padrao_objeto)
+            compra_data = extrair_objeto_da_compra(content)
+            items_data = identificar_itens_e_grupos(content, padrao_grupo2, padrao_item2, padrao_3, padrao_4, pd.DataFrame())
+
+            for item_data in items_data:
+                if isinstance(item_data, dict):
+                    all_data.append({
+                        **uasg_pregao_data,
+                        "objeto": compra_data,  
+                        **item_data
+                    })
+                else:
+                    print(f"Formato inesperado em item_data: {item_data}")
+        else:
+            print(f"Formato inválido em extracted_data: {item} (Tipo: {type(item)})")
+
+    if not all_data:
+        raise ValueError("Nenhum dado válido foi encontrado para criar o DataFrame.")
+
+    dataframe_licitacao = pd.DataFrame(all_data)
+    
+    if "item" not in dataframe_licitacao.columns:
+        raise ValueError("A coluna 'item' não foi encontrada no DataFrame.")
+    
+    return dataframe_licitacao.sort_values(by="item")
+
+def identificar_itens_e_grupos(conteudo: str, padrao_grupo2: str, padrao_item2: str, padrao_3: str, padrao_4: str, df: pd.DataFrame) -> list:
+    conteudo = re.sub(r'\s+', ' ', conteudo).strip()
+    itens_data = []
+    itens = buscar_itens(conteudo, padrao_grupo2, padrao_item2)
+
+    ultima_posicao_processada = 0
+    for idx, match in enumerate(itens):
+        item_data, ultima_posicao_processada = processar_item(match, conteudo, ultima_posicao_processada, padrao_3, padrao_4)
+        item_data = process_cnpj_data(item_data)
+        itens_data.append(item_data)
+
+    return itens_data
+
+def process_cnpj_data(cnpj_dict):
+    for field in ["valor_estimado", "melhor_lance", "valor_negociado"]:
+        valor = cnpj_dict.get(field, 'N/A')  
+        if isinstance(valor, str):
+            try:
+                cnpj_dict[field] = float(valor.replace(".", "").replace(",", "."))
+            except ValueError:
+                cnpj_dict[field] = 'N/A'
+
+    quantidade = cnpj_dict.get("quantidade", 'N/A')
+    try:
+        cnpj_dict["quantidade"] = int(quantidade)
+    except ValueError:
+        pass
+
+    valor_negociado = cnpj_dict.get("valor_negociado", 'N/A')
+    if valor_negociado in [None, "N/A", "", "none", "null"]:
+        cnpj_dict["valor_homologado_item_unitario"] = cnpj_dict.get("melhor_lance", 'N/A')
+    else:
+        cnpj_dict["valor_homologado_item_unitario"] = valor_negociado
+
+    valor_estimado = cnpj_dict.get("valor_estimado", 'N/A')
+    valor_homologado_item_unitario = cnpj_dict.get("valor_homologado_item_unitario", 'N/A')
+    if valor_estimado != 'N/A' and valor_homologado_item_unitario != 'N/A':
+        try:
+            cnpj_dict["valor_estimado_total_do_item"] = cnpj_dict["quantidade"] * float(valor_estimado)
+            cnpj_dict["valor_homologado_total_item"] = cnpj_dict["quantidade"] * float(valor_homologado_item_unitario)
+            cnpj_dict["percentual_desconto"] = (1 - (float(valor_homologado_item_unitario) / float(valor_estimado))) * 100
+        except ValueError:
+            pass
+            
+    return cnpj_dict
+
+def buscar_itens(conteudo: str, padrao_grupo2: str, padrao_item2: str) -> list:
+    conteudo = re.sub(r'\s+', ' ', conteudo).strip()
+
+    matches_item2 = list(re.finditer(padrao_item2, conteudo, re.DOTALL | re.IGNORECASE))
+    if matches_item2:
+        return matches_item2  
+
+    matches_grupo2 = list(re.finditer(padrao_grupo2, conteudo, re.DOTALL | re.IGNORECASE))
+    if matches_grupo2:
+        return matches_grupo2  
+
+    return []  
+
+def extrair_objeto_da_compra(conteudo: str) -> str:
+    padrao_objeto_forte = r"Objeto\s+da\s+compra\s*:\s*(?P<objeto>.*?)\s*Entrega\s+de\s+propostas\s*:"
+    match = re.search(padrao_objeto_forte, conteudo, re.DOTALL | re.IGNORECASE)
+
+    if match:
+        return match.group("objeto").strip()
+    else:
+        return "N/A"
+    
+def extrair_uasg_e_pregao(conteudo: str, padrao_1: str, padrao_srp: str, padrao_objeto: str) -> dict: 
+    match = re.search(padrao_1, conteudo)
+    match2 = re.search(padrao_srp, conteudo)
+    match3 = re.search(padrao_objeto, conteudo)
+
+    srp_valor = match2.group("srp") if match2 else "N/A"
+    objeto_valor = match3.group("objeto") if match3 else "N/A"
+
+    if not match3:
+        padrao_objeto_forte = r"Objeto\s+da\s+compra\s*:\s*(?P<objeto>.*?)\s*Entrega\s+de\s+propostas\s*:"
+        match_forte = re.search(padrao_objeto_forte, conteudo, re.DOTALL | re.IGNORECASE)
+        if match_forte:
+            objeto_valor = match_forte.group("objeto").strip()
+
+    if match:
+        return {
+            "uasg": match.group("uasg"),
+            "orgao_responsavel": match.group("orgao_responsavel"),
+            "num_pregao": match.group("num_pregao"),
+            "ano_pregao": match.group("ano_pregao"),
+            "srp": srp_valor,
+            "objeto": objeto_valor
+        }
+    return {}
+
+def save_to_dataframe(extracted_data): 
+    df_extracted = create_dataframe_from_pdf_files(extracted_data)
+    df_extracted['item'] = pd.to_numeric(df_extracted['item'], errors='coerce').astype('Int64')
+    return df_extracted
