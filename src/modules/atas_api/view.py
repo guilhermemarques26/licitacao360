@@ -40,19 +40,30 @@ class GerarAtasApiView(QMainWindow):
         label_ata_api = QLabel("Atas de Registro de Preços (API)", self)
         label_ata_api.setStyleSheet("font-size: 26px; font-weight: bold;")
         self.main_layout.addWidget(label_ata_api)
+
+        # --- MENSAGEM DE "EM DESENVOLVIMENTO" ---
+        lbl_dev = QLabel("Este módulo de integração com a API está em desenvolvimento...")
+        lbl_dev.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_dev.setStyleSheet("color: #E67E22; font-style: italic; font-size: 18px; padding: 50px;")
+        self.main_layout.addWidget(lbl_dev)
         
-        # Adiciona menu e conteúdo
-        menu_widget = self.create_menu_layout()
+        # Empurra a mensagem para o topo e deixa o resto da tela limpa
+        self.main_layout.addStretch()
         
-        # Área de conteúdo com QStackedWidget
+        # --- CRIAÇÃO DOS WIDGETS INVISÍVEIS PARA NÃO QUEBRAR O CONTROLLER ---
+        # Adiciona menu e conteúdo à estrutura, mas os mantém ocultos
+        self.menu_widget = self.create_menu_layout()
         self.content_area = QStackedWidget()
-        self.main_layout.addWidget(menu_widget)
+        
+        self.main_layout.addWidget(self.menu_widget)
         self.main_layout.addWidget(self.content_area)
         
-        # Inicializa os widgets de conteúdo para cada seção
+        # O SEGRED0: Ocultamos a área visual, mas os objetos existem na memória!
+        self.menu_widget.hide()
+        self.content_area.hide()
+        
+        # Inicializa os widgets de conteúdo silenciosamente em segundo plano
         self.init_content_widgets()
-
-        # Define o conteúdo inicial
         self.show_initial_content()
 
     def init_content_widgets(self):

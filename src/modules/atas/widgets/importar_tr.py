@@ -515,13 +515,13 @@ class TermoReferenciaWidget(QWidget):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         
-        add_button("Tabela em Branco", "excel_down", self.abrirTabelaNova, button_layout, self.icons, tooltip="Cria uma tabela vazia", button_size=(150, 30))
+        add_button("Tabela em Branco", "excel_down", self.abrirTabelaNova, button_layout, self.icons, tooltip="Cria uma tabela vazia", button_size=(180, 30))
         add_button("Extrair TR", "pdf", self.extrairTrSignal, button_layout, self.icons, tooltip="Extrai as especificações do PDF", button_size=(150, 30))
         
         self.extrairTrSignal.connect(self.abrir_dialog_config_extracao)
         
-        add_button("Carregar Tabela", "excel_up", self.carregarTabela, button_layout, self.icons, tooltip="Carrega a tabela preenchida para o banco", button_size=(150, 30))
-        add_button("Limpar Tabela", "delete", self.limparTabelaSignal, button_layout, self.icons, tooltip="Apaga todos os dados da tabela atual", button_size=(150, 30))
+        add_button("Carregar Tabela", "excel_up", self.carregarTabela, button_layout, self.icons, tooltip="Carrega a tabela preenchida para o banco", button_size=(180, 30))
+        add_button("Limpar Tabela", "delete", self.limparTabelaSignal, button_layout, self.icons, tooltip="Apaga todos os dados da tabela atual", button_size=(180, 30))
         
         button_layout.addStretch()
         self.layout.addLayout(button_layout)
@@ -576,10 +576,32 @@ class TermoReferenciaWidget(QWidget):
         self.dicionario_correcoes = self.carregar_dicionario()
         self.configurarSqlModelSignal.emit()
 
+    def get_dicionario_path(self):
+        """
+        Descobre o caminho raiz do programa (seja no script .py ou no .exe final) 
+        e direciona para 'internal/src/assets'.
+        """
+        import sys
+        import os
+        from pathlib import Path
+
+        if getattr(sys, 'frozen', False):
+            # Se for o executável compilado (.exe)
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # Se for rodando via script Python
+            base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            
+        pasta_assets = Path(base_dir) / "internal" / "src" / "assets"
+        
+        # Cria as pastas internal > src > assets silenciosamente caso não existam
+        pasta_assets.mkdir(parents=True, exist_ok=True)
+        
+        return pasta_assets / "dicionario_correcoes.json"
+
     def carregar_dicionario(self):
-        dir_app = Path.home() / "Licitacao360"
-        dir_app.mkdir(exist_ok=True)
-        caminho_dic = dir_app / "dicionario_correcoes.json"
+        import json
+        caminho_dic = self.get_dicionario_path()
         
         dic_padrao = {
             "fomo": "forno", "inax": "inox", "inar": "inox", "moxidável": "inoxidável",
@@ -647,14 +669,17 @@ class TermoReferenciaWidget(QWidget):
                 return dic_padrao
 
     def abrir_arquivo_dicionario(self):
-        dir_app = Path.home() / "Licitacao360"
-        caminho_dic = dir_app / "dicionario_correcoes.json"
+        import subprocess
+        caminho_dic = self.get_dicionario_path()
+        
         if not caminho_dic.exists():
             self.carregar_dicionario()
+            
         try:
-            os.startfile(str(caminho_dic))
-        except Exception:
-            QMessageBox.warning(self, "Erro", f"Não foi possível abrir o arquivo automaticamente.\nPasta: {dir_app}")
+            # Aciona o subprocesso para forçar a abertura exclusivamente com o Bloco de Notas (notepad.exe)
+            subprocess.Popen(['notepad.exe', str(caminho_dic)])
+        except Exception as e:
+            QMessageBox.warning(self, "Erro", f"Não foi possível abrir o arquivo no Bloco de Notas.\nCaminho: {caminho_dic}")
 
     def abrir_dialog_config_extracao(self):
         try:

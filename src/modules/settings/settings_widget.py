@@ -78,12 +78,20 @@ class SettingsWidget(QWidget):
         group.setStyleSheet("QGroupBox { font-weight: bold; }")
         layout = QVBoxLayout()
         
+        # --- MENSAGEM DE "EM DESENVOLVIMENTO" ---
+        lbl_dev = QLabel("Em desenvolvimento...")
+        lbl_dev.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_dev.setStyleSheet("color: #E67E22; font-style: italic; font-size: 14px; padding: 20px;")
+        layout.addWidget(lbl_dev)
+
+        # --- CÓDIGO ORIGINAL PRESERVADO (COMENTADO) ---
+        """
         lbl_instr = QLabel("Clique em 'Capturar', posicione o mouse no local correto e aguarde 5 segundos.")
         lbl_instr.setStyleSheet("color: #CCC; font-style: italic;") # Cor clara para tema escuro
         layout.addWidget(lbl_instr)
 
         botoes_config = [
-            ("1. Botão 'Novo Email'", "btn_novo_email"),
+            ("Botão 'Novo Email'", "btn_novo_email"),
             ("2. Campo 'Para'", "campo_para"),
             ("3. Botão 'Exibir Cc' (Opcional)", "btn_exibir_cc"),
             ("4. Campo 'Cc'", "campo_cc"),
@@ -95,6 +103,7 @@ class SettingsWidget(QWidget):
 
         for label_text, key in botoes_config:
             self.add_capture_row(layout, label_text, key)
+        """
 
         group.setLayout(layout)
         self.layout.addWidget(group)
@@ -105,6 +114,14 @@ class SettingsWidget(QWidget):
         self.cc_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         cc_layout = QVBoxLayout()
 
+        # --- MENSAGEM DE "EM DESENVOLVIMENTO" ---
+        lbl_dev = QLabel("Em desenvolvimento...")
+        lbl_dev.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_dev.setStyleSheet("color: #E67E22; font-style: italic; font-size: 14px; padding: 20px;")
+        cc_layout.addWidget(lbl_dev)
+
+        # --- CÓDIGO ORIGINAL PRESERVADO (COMENTADO) ---
+        """
         # Botão de Importar
         self.btn_importar_cc = QPushButton("Importar Lista de CCs (Excel/CSV)")
         self.btn_importar_cc.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -120,6 +137,7 @@ class SettingsWidget(QWidget):
         
         # Carrega a lista atual
         self.atualizar_lista_cc_visual()
+        """
 
         self.cc_group.setLayout(cc_layout)
         self.layout.addWidget(self.cc_group)

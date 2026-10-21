@@ -37,6 +37,12 @@ PyInstaller.__main__.run([
     '--collect-all=openpyxl',
     '--collect-all=pandas',
     
+    # =====================================================================
+    # CORREÇÃO: Coleta completa do corretor ortográfico e seus dicionários
+    # =====================================================================
+    '--collect-all=spellchecker',
+    '--collect-data=spellchecker',
+    
     # Submódulos essenciais do PyQt6
     '--hidden-import=PyQt6.QtCore',
     '--hidden-import=PyQt6.QtGui',

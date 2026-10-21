@@ -82,7 +82,7 @@ if __name__ == "__main__":
     class MainWindow(QMainWindow):
         def __init__(self):
             super().__init__()
-            print("Projeto Hasta360 - Versão 3.4.1 - 2025")
+            print("Projeto Licitação360 - Versão 3.4.1 - 2025")
             self.icons = load_icons()
             self.buttons = {}
             self.active_button = None

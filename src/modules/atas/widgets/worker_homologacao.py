@@ -133,29 +133,6 @@ class Worker(QThread):
         
         self.progress_signal.emit(100)
 
-    def _processar_modo_completo(self):
-        extracted_data = []
-        pdf_files = list(self.pdf_dir.glob("*.pdf"))
-        total_files = len(pdf_files)
-
-        for index, pdf_file in enumerate(pdf_files):
-            text = self.process_single_pdf(pdf_file) 
-            if text:
-                extracted_data.append({
-                    "nome_arquivo": pdf_file.name,
-                    "text": text
-                })
-                self.update_context_signal.emit(f"Análise do PDF {pdf_file.name} concluída com êxito.")
-            else:
-                self.update_context_signal.emit(f"Não foi possível obter os dados corretamente de {pdf_file.name}.")
-
-            progress = int((index + 1) / total_files * 100)
-            self.progress_signal.emit(progress)
-            QThread.msleep(100)
-
-        self.processing_complete.emit(extracted_data)
-
-
     def process_single_pdf(self, pdf_file):
         try:
             with pdfplumber.open(pdf_file) as pdf:
@@ -171,7 +148,6 @@ class Worker(QThread):
             self.update_context_signal.emit(f"Erro ao processar {pdf_file.name}: {e}")
             return None
 
-
 class CustomTreeView(QTreeView):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -183,13 +159,13 @@ class CustomTreeView(QTreeView):
             return
 
         item = self.model().itemFromIndex(index)
-        if item and " - " in item.text():
+        if item and "\n" in item.text():
             doc = QTextDocument()
             doc.setHtml(item.text())
             plain_text = doc.toPlainText()
 
-            if " - " in plain_text:
-                self.cnpj = plain_text.split(' - ')[0]
+            if "\n" in plain_text:
+                self.cnpj = plain_text.split('\n')[0]
 
             menu = QMenu(self)
             copyAction = QAction(f"Copiar CNPJ {self.cnpj}", self)
@@ -198,8 +174,8 @@ class CustomTreeView(QTreeView):
             menu.exec(event.globalPos())
 
     def copy_cnpj(self, text):
-        if " - " in text:
-            self.cnpj = text.split(' - ')[0]  
+        if "\n" in text:
+            self.cnpj = text.split('\n')[0]  
         QApplication.clipboard().setText(self.cnpj)
         QToolTip.showText(QCursor.pos(), f"CNPJ {self.cnpj} copiado para área de transferência", self)
 
@@ -285,10 +261,6 @@ class TreeViewWindow(QDialog):
         self.database_ata_manager = database_ata_manager  
         self.setMinimumSize(800, 600)
 
-        # =================================================================
-        # BLINDAGEM VISUAL: Corta o "R$" ignorando as quebras de linha (re.DOTALL)
-        # Isso limpa a tabela caso a base de dados ainda tenha resquícios antigos
-        # =================================================================
         if 'unidade' in dataframe.columns:
             dataframe['unidade'] = dataframe['unidade'].astype(str).apply(
                 lambda x: re.sub(r'\s*R\$.*', '', x, flags=re.DOTALL | re.IGNORECASE).strip()
@@ -328,7 +300,7 @@ class ModeloTreeview:
         cnpj = str(row['cnpj']) if pd.notna(row['cnpj']) else ""
         situacao = str(row['situacao']) if pd.notna(row['situacao']) else "Não definido"
         is_situacao_only = not empresa_name and not cnpj
-        parent_key = f"{situacao}" if is_situacao_only else f"{cnpj} - {empresa_name}".strip(" -")
+        parent_key = f"{situacao}" if is_situacao_only else f"{cnpj}\n{empresa_name}".strip(" -")
 
         if parent_key not in empresa_items:
             parent_item = QStandardItem()
@@ -394,7 +366,7 @@ class ModeloTreeview:
             situacao = 'Não definido'
 
         if situacao in situacoes_especificas or situacao == 'Não definido':
-            item_text = f"Item {row['item']} - {row['descricao']} - {situacao}"
+            item_text = f"Item {row['item']}\n{row['descricao']}\n{situacao}"
             item_info = QStandardItem(item_text)
             item_info.setEditable(False)
             parent_item.appendRow(item_info)
@@ -426,15 +398,15 @@ class ModeloTreeview:
         return [self.criar_detalhe_item(field.capitalize(), row[field]) for field in fields if pd.notna(row[field])]
 
     def adicionar_subitens_detalhados(self, row, sub_items_layout):
-        item_info_html = f"Item {row['item']} - {row['descricao']} - {row['situacao']}"
+        item_info_html = f"Item {row['item']}\n{row['descricao']}\n{row['situacao']}"
         item_info = QStandardItem(item_info_html)
         item_info.setEditable(False)
         sub_items_layout.appendRow(item_info)
 
         detalhes = [
             f"Descrição Detalhada: {row['descricao_detalhada']}",
-            f"Unidade de Fornecimento: {row.get('unidade', 'Não informado')} Quantidade: {self.formatar_quantidade(row['quantidade'])} "
-            f"Valor Estimado: {self.formatar_brl(row['valor_estimado'])} Valor Homologado: {self.formatar_brl(row['valor_homologado_item_unitario'])} "
+            f"Unidade de Fornecimento: {row.get('unidade', 'Não informado')} Quantidade: {self.formatar_quantidade(row['quantidade'])} ",
+            f"Valor Estimado: {self.formatar_brl(row['valor_estimado'])} Valor Homologado: {self.formatar_brl(row['valor_homologado_item_unitario'])} ",
             f"Desconto: {self.formatar_percentual(row['percentual_desconto'])} Marca: {row['marca_fabricante']} Modelo: {row['modelo_versao']}",
         ]
 
@@ -616,10 +588,6 @@ padrao_3 = padrao_cpf_od + padrao_empresa + padrao_bloco_valores
 def processar_item(match, conteudo: str, ultima_posicao_processada: int, padrao_3: str, padrao_4: str) -> dict:
     item = match.groupdict()
     
-    # =================================================================
-    # CORREÇÃO DEFINITIVA DA UNIDADE: 
-    # Adicionado re.DOTALL para forçar a limpeza ignorando quebras de linha!
-    # =================================================================
     unidade_bruta = str(item.get('unidade', 'N/A'))
     unidade_limpa = re.sub(r'\s*R\$.*', '', unidade_bruta, flags=re.DOTALL | re.IGNORECASE).strip()
 

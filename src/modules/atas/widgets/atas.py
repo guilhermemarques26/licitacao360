@@ -19,6 +19,7 @@ import os
 import sys
 import subprocess
 from PyQt6.QtSql import QSqlQuery
+from modules.utils.spell_checker import SpellTextEdit
 
 from modules.utils.linha_layout import linha_divisoria_layout
 
@@ -124,7 +125,7 @@ class GerarAtaWidget(QWidget):
         cabecalho_label.setFont(QFont('Arial', 14))
 
         # Editor de texto para o cabeçalho
-        self.header_editor = QTextEdit()
+        self.header_editor = SpellTextEdit()
         initial_text = self.config_data.get("initial_text", "")
         self.header_editor.setFont(QFont('Arial', 12))      
         self.header_editor.setText(initial_text)

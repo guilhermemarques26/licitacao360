@@ -2,13 +2,15 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtGui import *
 from PyQt6.QtCore import *
 from PyQt6.QtSql import QSqlQuery
-import re
 import time
 import pandas as pd
 from pathlib import Path
-from modules.atas.widgets.worker_homologacao import Worker, TreeViewWindow, WorkerSICAF, extrair_dados_sicaf
-import logging
+
 from modules.utils.add_button import add_button_func, add_button_func_vermelho
+
+# Importação inteligente: Puxa o seu Worker original e a função de DataFrame sem precisar repetir o código!
+from modules.atas.widgets.worker_homologacao import Worker, save_to_dataframe
+
 
 class ConclusaoDialog(QDialog):
     def __init__(self, parent=None):
@@ -30,6 +32,7 @@ class ConclusaoDialog(QDialog):
         main_layout.addWidget(close_button)
 
         self.setLayout(main_layout)
+
 
 class ProcessamentoWidget(QWidget):
     resultadosHomologacao = pyqtSignal(object)
@@ -103,7 +106,6 @@ class ProcessamentoWidget(QWidget):
 
     def setup_button_layout(self, main_layout):
         button_layout = QHBoxLayout()
-        add_button_func("Gerar Planilha Base", "excel_down", self.gerarPlanilhaBaseClicked.emit, button_layout, self.icon_cache, "Cruza TR e Homologação para gerar planilha base", button_size=(250, 40))
         add_button_func_vermelho("Iniciar Processamento", self.start_processing, button_layout, "Clique para iniciar", button_size=(300, 40))
         main_layout.addLayout(button_layout)
 
@@ -151,26 +153,44 @@ class ProcessamentoWidget(QWidget):
         self.current_dataframe = None
         if not self.verify_directories():
             return
+            
+        # 1. Liga o Spinner de carregamento (A interface fica bloqueada para proteção)
+        if hasattr(self.main_window, 'loading_screen'):
+            self.main_window.loading_screen.start("A processar relatórios de Homologação...")
+            
         self.start_time = time.time()
         self.timer.timeout.connect(self.update_time)
         self.timer.start(1000)
+        self.set_buttons_enabled(False)
 
-        self.worker_thread = Worker(self.pdf_dir)
+        # 2. Inicia o seu Worker em background
+        self.worker_thread = Worker(self.pdf_dir, modo="completo")
         self.worker_thread.processing_complete.connect(self.finalizar_processamento_homologacao)
         self.worker_thread.update_context_signal.connect(self.update_context)
         self.worker_thread.progress_signal.connect(self.progress_bar.setValue)
 
         self.worker_thread.start()
-        self.set_buttons_enabled(False)
 
     def finalizar_processamento_homologacao(self, extracted_data):
+        # 1. Desliga o Spinner de carregamento
+        if hasattr(self.main_window, 'loading_screen'):
+            self.main_window.loading_screen.stop()
+            
         self.update_context("Processamento concluído.")
         self.timer.stop() 
         self.set_buttons_enabled(True)
         elapsed_time = int(time.time() - self.start_time)
         self.time_label.setText(f"Tempo total: {elapsed_time}s")
-        self.homologacao_dataframe = save_to_dataframe(extracted_data)
-        self.atualizar_ou_inserir_controle_homologacao()
+        
+        try:
+            # 2. Transforma os dados em planilha usando a função limpa importada
+            self.homologacao_dataframe = save_to_dataframe(extracted_data)
+            self.atualizar_ou_inserir_controle_homologacao()
+            
+            dialog = ConclusaoDialog(self)
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Erro na Estruturação", f"Ocorreu um erro ao estruturar os dados:\n{str(e)}")
 
     def atualizar_ou_inserir_controle_homologacao(self): 
         if self.homologacao_dataframe is None or self.homologacao_dataframe.empty:
@@ -289,242 +309,3 @@ class ProcessamentoWidget(QWidget):
             self.update_context("Diretório PDF não encontrado.")
             return False
         return True
-
-
-# =================================================================
-# EXPRESSÕES REGULARES BLINDADAS (LOOKAHEAD PARA UNIDADE)
-# =================================================================
-padrao_1 = (r"UASG\s+(?P<uasg>\d+)\s+-\s+(?P<orgao_responsavel>.+?)\s+PREGÃO\s+(?P<num_pregao>\d+)/(?P<ano_pregao>\d+)")
-padrao_srp = r"(?P<srp>SRP - Registro de Preço|SISPP - Tradicional)"
-padrao_objeto = (r"Objeto da compra:\s*(?P<objeto>.*?)\s*Entrega de propostas:")
-
-padrao_grupo2 = (
-    r"Item\s+(?P<item>\d+)(?:\s+do\s+Grupo\s+G(?P<grupo>\d+))?.*?"
-    r"Valor\s+estimado:\s+R\$\s+(?P<valor>[\d,\.]+).*?"
-    r"(?:Critério\s+de\s+julgamento:\s+(?P<crit_julgamento>.*?))?\s*"
-    r"Quantidade:\s+(?P<quantidade>\d+)\s+"
-    r"(?:Unidade\s+de\s+fornecimento|UF):\s+(?P<unidade>.*?)(?=\s*R\$|\s*Situação:)\s*.*?"
-    r"Situação:\s+(?P<situacao>Adjudicado e Homologado|Deserto e Homologado|Fracassado e Homologado|Anulado e Homologado|Revogado e Homologado)"
-)
-
-padrao_item_quantidade = (
-    r"Item\s+(?P<item>\d+)\s+-\s+.*?"
-    r"Quantidade:\s+(?P<quantidade>\d+)\s+"
-)
-
-padrao_valor_estimado_unidade_fornecimento = (
-    r"Valor\s+estimado:\s+R\$\s+(?P<valor>[\d,.]+)(?:\s+\(unitário\))?\s+"
-    r"(?:Unidade\s+de\s+fornecimento|UF):\s+(?P<unidade>.*?)(?=\s*R\$|\s*Situação:)\s*.*?"
-)
-
-padrao_situacao = (
-    r"Situação:\s+(?P<situacao>"
-    r"Adjudicado e Homologado|Deserto e Homologado|Fracassado e Homologado|Anulado e Homologado|Revogado e Homologado)"
-)
-
-padrao_item2 = padrao_item_quantidade + padrao_valor_estimado_unidade_fornecimento + padrao_situacao
-
-padrao_4 = (
-    r"Proposta\s+adjudicada.*?"
-    r"Marca/Fabricante\s*:\s*(?P<marca_fabricante>.*?)\s*"
-    r"Modelo/versão\s*:\s*(?P<modelo_versao>.*?)(?=\s*\d{2}/\d{2}/\d{4}|\s*Valor\s+proposta\s*:)"
-)
-
-padrao_cpf_od = (
-    r"(?:Adjucado|Adjudicado)\s+e\s+Homologado\s+por\s+CPF\s+"
-    r"(?P<cpf_od>\*\*\*.\d{3}.\*\*\*-\*\d{1})\s+-\s+"
-    r"(?P<ordenador_despesa>[^\d,]+?)\s+para\s+"
-)
-
-padrao_empresa = (
-    r"(?P<empresa>.*?)(?=\s*,\s*CNPJ\s+)"
-    r"\s*,\s*CNPJ\s+(?P<cnpj>\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}),\s+"
-)
-
-padrao_bloco_valores = (
-    r"(?P<bloco_valores>.*?)(?=\s*Propostas\s+do\s+Item)"
-)
-
-padrao_3 = padrao_cpf_od + padrao_empresa + padrao_bloco_valores
-
-
-def processar_item(match, conteudo: str, ultima_posicao_processada: int, padrao_3: str, padrao_4: str) -> dict:
-    item = match.groupdict()
-    
-    # CORTE BRUTO COM DOTALL: Destrói qualquer 'R$' e o que estiver abaixo!
-    unidade_bruta = str(item.get('unidade', 'N/A'))
-    unidade_limpa = re.sub(r'\s*R\$.*', '', unidade_bruta, flags=re.DOTALL | re.IGNORECASE).strip()
-
-    item_data = {
-        "item": int(item['item']) if 'item' in item and item['item'].isdigit() else 'N/A',
-        "grupo": item.get('grupo', 'N/A'),
-        "valor_estimado": item.get('valor', 'N/A'),
-        "quantidade": item.get('quantidade', 'N/A'),
-        "unidade": unidade_limpa,
-        "situacao": item.get('situacao', 'N/A')
-    }
-
-    if item_data['situacao'] == 'Adjudicado e Homologado':
-        match_3 = re.search(padrao_3, conteudo, re.DOTALL | re.IGNORECASE)
-        
-        if match_3:
-            item_data["ordenador_despesa"] = match_3.group('ordenador_despesa').strip()
-            item_data["empresa"] = match_3.group('empresa').replace('\n', ' ').strip()
-            item_data["cnpj"] = match_3.group('cnpj').strip()
-
-            bloco_valores = match_3.group('bloco_valores')
-            
-            match_lance = re.search(r"melhor\s+lance\s*:\s*R\$\s*([\d,.]+)", bloco_valores)
-            item_data["melhor_lance"] = match_lance.group(1) if match_lance else 'N/A'
-
-            match_negociado = re.search(r"valor\s+negociado\s*:\s*R\$\s*([\d,.]+)", bloco_valores)
-            item_data["valor_negociado"] = match_negociado.group(1) if match_negociado else 'N/A'
-            
-            posicao_final_match_3 = match_3.end()
-            match_4 = re.search(padrao_4, conteudo[posicao_final_match_3:], re.DOTALL | re.IGNORECASE)
-            if match_4:
-                item_data["marca_fabricante"] = match_4.group('marca_fabricante').strip() or 'N/A'
-                item_data["modelo_versao"] = match_4.group('modelo_versao').strip() or 'N/A'
-
-    return item_data, ultima_posicao_processada 
-
-def create_dataframe_from_pdf_files(extracted_data):
-    if not isinstance(extracted_data, list):
-        raise TypeError("extracted_data deve ser uma lista de dicionários.")
-
-    all_data = []
-    print("\nIniciando processamento de extracted_data...\n")
-
-    for idx, item in enumerate(extracted_data):
-        if isinstance(item, dict) and 'text' in item and isinstance(item['text'], str):
-            content = item['text']
-            
-            uasg_pregao_data = extrair_uasg_e_pregao(content, padrao_1, padrao_srp, padrao_objeto)
-            compra_data = extrair_objeto_da_compra(content)
-            items_data = identificar_itens_e_grupos(content, padrao_grupo2, padrao_item2, padrao_3, padrao_4, pd.DataFrame())
-
-            for item_data in items_data:
-                if isinstance(item_data, dict):
-                    all_data.append({
-                        **uasg_pregao_data,
-                        "objeto": compra_data,  
-                        **item_data
-                    })
-                else:
-                    print(f"Formato inesperado em item_data: {item_data}")
-        else:
-            print(f"Formato inválido em extracted_data: {item} (Tipo: {type(item)})")
-
-    if not all_data:
-        raise ValueError("Nenhum dado válido foi encontrado para criar o DataFrame.")
-
-    dataframe_licitacao = pd.DataFrame(all_data)
-    
-    if "item" not in dataframe_licitacao.columns:
-        raise ValueError("A coluna 'item' não foi encontrada no DataFrame.")
-    
-    return dataframe_licitacao.sort_values(by="item")
-
-def identificar_itens_e_grupos(conteudo: str, padrao_grupo2: str, padrao_item2: str, padrao_3: str, padrao_4: str, df: pd.DataFrame) -> list:
-    conteudo = re.sub(r'\s+', ' ', conteudo).strip()
-    itens_data = []
-    itens = buscar_itens(conteudo, padrao_grupo2, padrao_item2)
-
-    ultima_posicao_processada = 0
-    for idx, match in enumerate(itens):
-        item_data, ultima_posicao_processada = processar_item(match, conteudo, ultima_posicao_processada, padrao_3, padrao_4)
-        item_data = process_cnpj_data(item_data)
-        itens_data.append(item_data)
-
-    return itens_data
-
-def process_cnpj_data(cnpj_dict):
-    for field in ["valor_estimado", "melhor_lance", "valor_negociado"]:
-        valor = cnpj_dict.get(field, 'N/A')  
-        if isinstance(valor, str):
-            try:
-                cnpj_dict[field] = float(valor.replace(".", "").replace(",", "."))
-            except ValueError:
-                cnpj_dict[field] = 'N/A'
-
-    quantidade = cnpj_dict.get("quantidade", 'N/A')
-    try:
-        cnpj_dict["quantidade"] = int(quantidade)
-    except ValueError:
-        pass
-
-    valor_negociado = cnpj_dict.get("valor_negociado", 'N/A')
-    if valor_negociado in [None, "N/A", "", "none", "null"]:
-        cnpj_dict["valor_homologado_item_unitario"] = cnpj_dict.get("melhor_lance", 'N/A')
-    else:
-        cnpj_dict["valor_homologado_item_unitario"] = valor_negociado
-
-    valor_estimado = cnpj_dict.get("valor_estimado", 'N/A')
-    valor_homologado_item_unitario = cnpj_dict.get("valor_homologado_item_unitario", 'N/A')
-    if valor_estimado != 'N/A' and valor_homologado_item_unitario != 'N/A':
-        try:
-            cnpj_dict["valor_estimado_total_do_item"] = cnpj_dict["quantidade"] * float(valor_estimado)
-            cnpj_dict["valor_homologado_total_item"] = cnpj_dict["quantidade"] * float(valor_homologado_item_unitario)
-            cnpj_dict["percentual_desconto"] = (1 - (float(valor_homologado_item_unitario) / float(valor_estimado))) * 100
-        except ValueError:
-            pass
-            
-    return cnpj_dict
-
-def buscar_itens(conteudo: str, padrao_grupo2: str, padrao_item2: str) -> list:
-    conteudo = re.sub(r'\s+', ' ', conteudo).strip()
-
-    matches_item2 = list(re.finditer(padrao_item2, conteudo, re.DOTALL | re.IGNORECASE))
-    if matches_item2:
-        return matches_item2  
-
-    matches_grupo2 = list(re.finditer(padrao_grupo2, conteudo, re.DOTALL | re.IGNORECASE))
-    if matches_grupo2:
-        return matches_grupo2  
-
-    return []  
-
-def extrair_objeto_da_compra(conteudo: str) -> str:
-    padrao_objeto_forte = r"Objeto\s+da\s+compra\s*:\s*(?P<objeto>.*?)\s*Entrega\s+de\s+propostas\s*:"
-    match = re.search(padrao_objeto_forte, conteudo, re.DOTALL | re.IGNORECASE)
-
-    if match:
-        return match.group("objeto").strip()
-    else:
-        return "N/A"
-    
-def extrair_uasg_e_pregao(conteudo: str, padrao_1: str, padrao_srp: str, padrao_objeto: str) -> dict: 
-    match = re.search(padrao_1, conteudo)
-    match2 = re.search(padrao_srp, conteudo)
-    match3 = re.search(padrao_objeto, conteudo)
-
-    srp_valor = match2.group("srp") if match2 else "N/A"
-    objeto_valor = match3.group("objeto") if match3 else "N/A"
-
-    if not match3:
-        padrao_objeto_forte = r"Objeto\s+da\s+compra\s*:\s*(?P<objeto>.*?)\s*Entrega\s+de\s+propostas\s*:"
-        match_forte = re.search(padrao_objeto_forte, conteudo, re.DOTALL | re.IGNORECASE)
-        if match_forte:
-            objeto_valor = match_forte.group("objeto").strip()
-
-    if match:
-        return {
-            "uasg": match.group("uasg"),
-            "orgao_responsavel": match.group("orgao_responsavel"),
-            "num_pregao": match.group("num_pregao"),
-            "ano_pregao": match.group("ano_pregao"),
-            "srp": srp_valor,
-            "objeto": objeto_valor
-        }
-    return {}
-
-def save_to_dataframe(extracted_data): 
-    df_extracted = create_dataframe_from_pdf_files(extracted_data)
-    df_extracted['item'] = pd.to_numeric(df_extracted['item'], errors='coerce').astype('Int64')
-    
-    # BLINDAGEM NO RETORNO: Limpa a coluna unidade antes de salvar no banco
-    if 'unidade' in df_extracted.columns:
-        df_extracted['unidade'] = df_extracted['unidade'].astype(str).apply(
-            lambda x: re.sub(r'\s*R\$.*', '', x, flags=re.DOTALL | re.IGNORECASE).strip()
-        )
-    return df_extracted
