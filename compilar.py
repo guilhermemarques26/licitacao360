@@ -27,8 +27,11 @@ PyInstaller.__main__.run([
     '--name=Licitacao360_Pro',
     '--icon=src/assets/icons/icon3.ico',
     '--paths=src',
+    
+    # Injeção de Pastas e Arquivos Estáticos
     f'--add-data=src/assets{os.pathsep}src/assets',
     f'--add-data=src/database{os.pathsep}src/database',
+    f'--add-data=src/modules/dispensa/template{os.pathsep}src/modules/dispensa/template',
     
     # Coleta completa de bibliotecas complexas de PDF e dados
     '--collect-all=pdfplumber',

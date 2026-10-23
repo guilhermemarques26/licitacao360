@@ -159,11 +159,14 @@ class InicioWidget(QWidget):
     def get_assets_path(self):
         """Descobre o caminho raiz do programa para localizar os ficheiros de ajuda."""
         if getattr(sys, 'frozen', False):
+            # Quando compilado (.exe), os ficheiros encontram-se na pasta _internal gerada pelo PyInstaller
             base_dir = os.path.dirname(sys.executable)
+            pasta_assets = Path(base_dir) / "_internal" / "src" / "assets" / "tutoriais"
         else:
+            # Quando executado como script (.py), busca na pasta assets tradicional a partir de 'src'
             base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            pasta_assets = Path(base_dir) / "assets" / "tutoriais"
             
-        pasta_assets = Path(base_dir) / "internal" / "src" / "assets" / "tutoriais"
         pasta_assets.mkdir(parents=True, exist_ok=True)
         return pasta_assets
 

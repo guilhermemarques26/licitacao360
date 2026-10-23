@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_data_files
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('src/assets', 'src/assets'), ('src/database', 'src/database')]
+datas = [('src/assets', 'src/assets'), ('src/database', 'src/database'), ('src/modules/dispensa/template', 'src/modules/dispensa/template')]
 binaries = []
 hiddenimports = ['PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtSql']
 datas += collect_data_files('spellchecker')

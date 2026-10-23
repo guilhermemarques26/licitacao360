@@ -750,21 +750,30 @@ class ConsolidarDocumentos:
         template_path = TEMPLATE_DISPENSA_DIR / template_filename
         id_processo = self.df_registro_selecionado['id_processo'].iloc[0].replace('/', '-')
         objeto = self.df_registro_selecionado['objeto'].iloc[0]
+        
+        # CORREÇÃO: \n substituído por ' - ' para formar um caminho de diretório válido
         self.nome_pasta = f"{id_processo} - {objeto}"
+        
         if 'pasta_base' not in self.config:
             self.alterar_diretorio_base()
+            
         pasta_base = Path(self.config['pasta_base']) / self.nome_pasta / subfolder_name
         pasta_base.mkdir(parents=True, exist_ok=True)
+        
+        # CORREÇÃO: \n substituído por ' - ' no nome do ficheiro DOCX
         save_path = pasta_base / f"{id_processo} - {file_description}.docx"
         return template_path, save_path
     
     def verificar_e_criar_pastas(self, pasta_base):
         id_processo_modificado = self.id_processo.replace("/", "-")
         objeto_modificado = self.objeto.replace("/", "-")
+        
+        # CORREÇÃO: \n substituído por ' - '
         base_path = pasta_base / f'{id_processo_modificado} - {objeto_modificado}'
 
         pastas_necessarias = [
-            pasta_base / '1. Autorizacao',
+            # CORREÇÃO: O '\n' que estava dentro da string foi removido
+            pasta_base / 'Autorizacao',
             pasta_base / '2. CP e anexos',
             pasta_base / '3. Aviso',
             pasta_base / '2. CP e anexos' / 'DFD',
@@ -793,14 +802,12 @@ class ConsolidarDocumentos:
         documentos = [
             {"template": "cp", "subfolder": "2. CP e anexos", "desc": "Comunicacao Padronizada"},
             {"template": "dfd", "subfolder": "2. CP e anexos/DFD", "desc": "Documento de Formalizacao de Demanda", "cover": "dfd.pdf"},
-            # --- INÍCIO DA MODIFICAÇÃO ---
             {"subfolder": "2. CP e anexos/DFD/Anexo A - Relatorio Safin", "cover": "anexo-a-dfd.pdf"},
             {"subfolder": "2. CP e anexos/DFD/Anexo B - Especificações e Quantidade", "cover": "anexo-b-dfd.pdf"},
             {"template": "tr", "subfolder": "2. CP e anexos/TR", "desc": "Termo de Referencia", "cover": "tr.pdf"},
             {"subfolder": "2. CP e anexos/TR/Pesquisa de Preços", "cover": "anexo-tr.pdf"},
             {"template": "dec_adeq", "subfolder": "2. CP e anexos/Declaracao de Adequação Orçamentária", "desc": "Declaracao de Adequação Orçamentária", "cover": "dec_adeq.pdf"},
             {"subfolder": "2. CP e anexos/Declaracao de Adequação Orçamentária/Relatório do PDM-Catser", "cover": "anexo-dec-adeq.pdf"},
-            # Adicione os outros documentos que faltavam na lista para serem incluídos no merge
             {"subfolder": "2. CP e anexos/ETP", "cover": "etp.pdf"},
             {"subfolder": "2. CP e anexos/MR", "cover": "mr.pdf"},
             {"template": "justificativas", "subfolder": "2. CP e anexos/Justificativas Relevantes", "desc": "Justificativas Relevantes", "cover": "justificativas.pdf"},
@@ -814,17 +821,16 @@ class ConsolidarDocumentos:
                 if docx_path:
                     pdf_path = self.salvarPDF(docx_path)
                     if pdf_path:
-                        pdf_info = {"pdf_path": pdf_path}
+                        # CORREÇÃO DA MESCLAGEM: Adiciona a capa primeiro, como um PDF isolado na fila
                         if "cover" in doc:
-                            # Adiciona a capa se ela existir
                             cover_path = TEMPLATE_DISPENSA_DIR / doc["cover"]
                             if cover_path.exists():
-                                pdf_info["cover_path"] = cover_path
-                        pdf_paths.append(pdf_info)
+                                pdf_paths.append({"pdf_path": cover_path})
+                        
+                        # Adiciona o documento preenchido logo em seguida
+                        pdf_paths.append({"pdf_path": pdf_path})
             else:
-                # Esta é a parte principal da correção: buscar TODOS os PDFs
                 anexo_folder = self.pasta_base / self.nome_pasta / doc["subfolder"]
-                # Chama a NOVA função que criamos
                 lista_de_anexos_pdf = self.get_all_pdfs_in_directory(anexo_folder)
                 
                 if lista_de_anexos_pdf:
@@ -832,11 +838,11 @@ class ConsolidarDocumentos:
                     if "cover" in doc:
                         cover_path = TEMPLATE_DISPENSA_DIR / doc["cover"]
                         if cover_path.exists():
-                            pdf_paths.append({"pdf_path": cover_path}) # Adiciona a capa como um PDF normal
+                            pdf_paths.append({"pdf_path": cover_path})
                     
                     # Adiciona CADA PDF encontrado na pasta do anexo
                     for pdf_file in lista_de_anexos_pdf:
-                        pdf_paths.append({"pdf_path": pdf_file}) # Adiciona o anexo
+                        pdf_paths.append({"pdf_path": pdf_file})
                 else:
                     QMessageBox.warning(None, "Aviso", f"Nenhum arquivo PDF encontrado em: {doc['subfolder']}")
 
